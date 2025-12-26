@@ -332,5 +332,129 @@ namespace Artemis
         }
 
         #endregion
+
+        #region Smoke Simulation
+
+        /// <summary>
+        /// Creates a smoke simulation at a position.
+        /// </summary>
+        public static SmokeSimulation CreateSmoke(Vector3D position, int maxParticles = 5000)
+        {
+            return new SmokeSimulation(position, maxParticles);
+        }
+
+        /// <summary>
+        /// Creates a campfire smoke effect.
+        /// </summary>
+        public static SmokeSimulation CreateCampfireSmoke(Vector3D position)
+        {
+            return SmokeSimulation.Campfire(position);
+        }
+
+        /// <summary>
+        /// Creates a chimney smoke effect.
+        /// </summary>
+        public static SmokeSimulation CreateChimneySmoke(Vector3D position)
+        {
+            return SmokeSimulation.Chimney(position);
+        }
+
+        /// <summary>
+        /// Creates a steam/vapor effect.
+        /// </summary>
+        public static SmokeSimulation CreateSteam(Vector3D position)
+        {
+            return SmokeSimulation.Steam(position);
+        }
+
+        /// <summary>
+        /// Creates an explosion smoke effect.
+        /// </summary>
+        public static SmokeSimulation CreateExplosionSmoke(Vector3D position, int particleCount = 200)
+        {
+            return SmokeSimulation.Explosion(position, particleCount);
+        }
+
+        #endregion
+
+        #region Fire Simulation
+
+        /// <summary>
+        /// Creates a fire simulation at a position.
+        /// </summary>
+        public static FireSimulation CreateFire(Vector3D position, int maxParticles = 3000)
+        {
+            return new FireSimulation(position, maxParticles);
+        }
+
+        /// <summary>
+        /// Creates a campfire.
+        /// </summary>
+        public static FireSimulation CreateCampfire(Vector3D position)
+        {
+            return FireSimulation.Campfire(position);
+        }
+
+        /// <summary>
+        /// Creates a torch fire.
+        /// </summary>
+        public static FireSimulation CreateTorch(Vector3D position)
+        {
+            return FireSimulation.Torch(position);
+        }
+
+        /// <summary>
+        /// Creates a candle flame.
+        /// </summary>
+        public static FireSimulation CreateCandle(Vector3D position)
+        {
+            return FireSimulation.Candle(position);
+        }
+
+        /// <summary>
+        /// Creates a bonfire (large fire).
+        /// </summary>
+        public static FireSimulation CreateBonfire(Vector3D position)
+        {
+            return FireSimulation.Bonfire(position);
+        }
+
+        /// <summary>
+        /// Creates an inferno (intense fire).
+        /// </summary>
+        public static FireSimulation CreateInferno(Vector3D position)
+        {
+            return FireSimulation.Inferno(position);
+        }
+
+        /// <summary>
+        /// Creates a gas burner flame (blue fire).
+        /// </summary>
+        public static FireSimulation CreateGasBurner(Vector3D position)
+        {
+            return FireSimulation.GasBurner(position);
+        }
+
+        /// <summary>
+        /// Creates an explosion fireball.
+        /// </summary>
+        public static FireSimulation CreateExplosionFire(Vector3D position, double radius = 3.0)
+        {
+            return FireSimulation.Explosion(position, radius);
+        }
+
+        #endregion
+
+        #region Combustion System
+
+        /// <summary>
+        /// Creates a combustion system for managing fire spread and extinguishing.
+        /// </summary>
+        public static CombustionSystem CreateCombustionSystem()
+        {
+            return new CombustionSystem();
+        }
+
+        #endregion
     }
 }

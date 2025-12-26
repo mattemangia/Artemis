@@ -9,6 +9,8 @@
 - **Rigid Body Dynamics**: Full 3D physics with collision detection and resolution
 - **Particle Systems**: High-performance particle simulation with up to 100,000+ particles
 - **Fluid Simulation**: SPH (Smoothed Particle Hydrodynamics) for realistic liquids
+- **Smoke & Fire**: Volumetric smoke with turbulence, fire with blackbody radiation colors
+- **Combustion System**: Fire spread to flammable objects, water extinguishing
 - **Multiple Force Types**: Gravity, wind, magnetism, buoyancy, vortex, explosions, and more
 - **Material System**: Elasticity, plasticity, ductility, friction properties
 - **Fluent API**: Intuitive, chainable configuration
@@ -415,6 +417,153 @@ var honey = FluidSimulation.Honey(bounds);
 var lava = FluidSimulation.Lava(bounds);
 ```
 
+### Smoke Simulation
+
+```csharp
+// Create smoke at position
+var smoke = Physics.CreateSmoke(new Vector3D(0, 0, 0));
+
+// Configure
+smoke.Buoyancy = 15.0;        // Upward force
+smoke.Turbulence = 5.0;       // Random movement
+smoke.SpreadRate = 2.0;       // Horizontal expansion
+smoke.GrowthRate = 0.5;       // Size increase over time
+smoke.Wind = new Vector3D(2, 0, 0);  // Apply wind
+
+// Presets
+var campfireSmoke = Physics.CreateCampfireSmoke(position);
+var chimneySmoke = Physics.CreateChimneySmoke(position);
+var steam = Physics.CreateSteam(position);
+var explosionSmoke = Physics.CreateExplosionSmoke(position, particleCount: 200);
+
+// Emit puff manually
+smoke.Puff(20);
+
+// Update each frame
+smoke.Update(deltaTime);
+
+// Render particles
+foreach (var particle in smoke.Particles.Particles)
+{
+    if (particle.IsAlive)
+    {
+        // Render smoke particle with fading alpha
+    }
+}
+```
+
+### Fire Simulation
+
+```csharp
+// Create fire at position
+var fire = Physics.CreateFire(new Vector3D(0, 0, 0));
+
+// Configure
+fire.InitialTemperature = 1500;  // Kelvin (affects color)
+fire.CoolingRate = 800;          // How fast it cools
+fire.Buoyancy = 20;              // Upward force
+fire.Turbulence = 8;             // Flickering
+fire.FlameHeight = 1.5;          // Height multiplier
+fire.Intensity = 1.0;            // 0-1 (can dim/brighten)
+
+// Fire presets
+var campfire = Physics.CreateCampfire(position);
+var torch = Physics.CreateTorch(position);
+var candle = Physics.CreateCandle(position);
+var bonfire = Physics.CreateBonfire(position);
+var inferno = Physics.CreateInferno(position);
+var gasBurner = Physics.CreateGasBurner(position);  // Blue flame
+
+// Explosion fireball
+var explosion = Physics.CreateExplosionFire(position, radius: 3.0);
+
+// Fire with linked smoke
+var fireWithSmoke = Physics.CreateCampfire(position).WithSmoke();
+
+// Control
+fire.Ignite();       // Start burning
+fire.Extinguish();   // Stop burning
+fire.WithWind(new Vector3D(5, 0, 0));  // Apply wind
+
+// Update each frame
+fire.Update(deltaTime);
+
+// Access particles for rendering
+foreach (var particle in fire.Particles.Particles)
+{
+    if (particle.IsAlive)
+    {
+        // particle.Color contains temperature-based color (blackbody radiation)
+        // Hot = white/blue, Medium = yellow/orange, Cool = red
+    }
+}
+
+// Get fire color at specific temperature
+var (r, g, b, a) = FireSimulation.GetFireColor(1200); // Kelvin
+```
+
+### Combustion System (Fire Spread & Extinguishing)
+
+```csharp
+// Create combustion system
+var combustion = Physics.CreateCombustionSystem();
+
+// Register fires
+var fire = Physics.CreateCampfire(position);
+combustion.RegisterFire(fire);
+
+// Register water (for extinguishing)
+var water = Physics.CreateWater(bounds);
+combustion.RegisterWater(water);
+
+// Register flammable objects
+var woodBox = Physics.CreateBox(position, halfExtents, 5.0, MaterialPresets.Wood());
+var combustible = combustion.RegisterCombustible(
+    woodBox,
+    flammability: 0.7,       // 0-1, how easily catches fire
+    burnTime: 30.0,          // Seconds until burned out
+    ignitionTemperature: 573 // Kelvin (~300°C)
+);
+
+// Or use material presets
+combustion.RegisterCombustible(paperStack, FlammableMaterial.Paper);
+combustion.RegisterCombustible(oilBarrel, FlammableMaterial.Oil);
+combustion.RegisterCombustible(coalPile, FlammableMaterial.Coal);
+
+// Available flammable materials:
+// FlammableMaterial.Wood, Paper, Fabric, Oil, Gasoline, Coal, Leaves, Rubber
+
+// Subscribe to events
+combustion.OnIgnition += obj => Console.WriteLine($"{obj.Body.Id} caught fire!");
+combustion.OnExtinguish += (fire, reason) => Console.WriteLine($"Fire out: {reason}");
+combustion.OnBurnedOut += obj => Console.WriteLine($"{obj.Body.Id} burned completely");
+
+// Update each frame
+combustion.Update(deltaTime);
+
+// Manual actions
+combustion.IgniteObject(combustible);     // Start fire on object
+combustion.SplashWater(position, radius: 2.0);  // Extinguish area
+combustion.ExtinguishAll();               // Stop all fires
+
+// Queries
+var nearest = combustion.GetNearestFire(playerPosition);
+bool onFire = combustion.IsPositionOnFire(position, radius: 1.0);
+double temp = combustion.GetTemperatureAtPosition(position);  // Kelvin
+```
+
+**Fire-Water Interaction:**
+- Water particles near fire reduce intensity
+- Enough water extinguishes fire completely
+- Extinguishing creates steam effect
+- Fire cannot spread through water
+
+**Fire Spread:**
+- Fire spreads to nearby flammable objects
+- Spread rate depends on distance and flammability
+- Objects burn down over time
+- Burned objects can no longer catch fire
+
 ---
 
 ## Triggers and Sensors
@@ -656,6 +805,15 @@ public class Game1 : Game
 | `CreateParticleSystem(max)` | Create particle system |
 | `CreateFluidSimulation(bounds)` | Create SPH fluid |
 | `CreateTrigger(pos, halfExtents)` | Create trigger zone |
+| `CreateSmoke(pos)` | Create smoke simulation |
+| `CreateCampfireSmoke(pos)` | Create campfire smoke preset |
+| `CreateSteam(pos)` | Create steam/vapor effect |
+| `CreateFire(pos)` | Create fire simulation |
+| `CreateCampfire(pos)` | Create campfire preset |
+| `CreateTorch(pos)` | Create torch flame preset |
+| `CreateBonfire(pos)` | Create large bonfire preset |
+| `CreateExplosionFire(pos, radius)` | Create explosion fireball |
+| `CreateCombustionSystem()` | Create fire/water interaction system |
 
 ---
 
