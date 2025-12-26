@@ -410,6 +410,61 @@ namespace Artemis.Demo
             );
         }
 
+        /// <summary>
+        /// Drops the ball at a screen position (for mouse/touch input).
+        /// Converts screen coordinates to world coordinates.
+        /// </summary>
+        /// <param name="screenX">Screen X position (0 to screenWidth).</param>
+        /// <param name="screenY">Screen Y position (0 to screenHeight).</param>
+        /// <param name="screenWidth">Total screen width.</param>
+        /// <param name="screenHeight">Total screen height.</param>
+        /// <returns>True if the drop was successful.</returns>
+        public bool DropBallAtScreenPosition(double screenX, double screenY, double screenWidth, double screenHeight)
+        {
+            // Convert screen coordinates to world coordinates
+            // Screen (0,0) is top-left, world center is (0,0)
+            double normalizedX = screenX / screenWidth;  // 0 to 1
+            double normalizedY = screenY / screenHeight; // 0 to 1
+
+            double worldX = (normalizedX - 0.5) * TerrariumWidth;
+            double worldZ = (normalizedY - 0.5) * TerrariumDepth;
+
+            return DropBall(worldX, worldZ);
+        }
+
+        /// <summary>
+        /// Gets the world position from a screen position.
+        /// </summary>
+        public Vector3D ScreenToWorldPosition(double screenX, double screenY, double screenWidth, double screenHeight, double worldY = 0)
+        {
+            double normalizedX = screenX / screenWidth;
+            double normalizedY = screenY / screenHeight;
+
+            double worldX = (normalizedX - 0.5) * TerrariumWidth;
+            double worldZ = (normalizedY - 0.5) * TerrariumDepth;
+
+            return new Vector3D(worldX, worldY, worldZ);
+        }
+
+        /// <summary>
+        /// Gets the screen position from a world position.
+        /// </summary>
+        public (double screenX, double screenY) WorldToScreenPosition(Vector3D worldPos, double screenWidth, double screenHeight)
+        {
+            double normalizedX = (worldPos.X / TerrariumWidth) + 0.5;
+            double normalizedY = (worldPos.Z / TerrariumDepth) + 0.5;
+
+            return (normalizedX * screenWidth, normalizedY * screenHeight);
+        }
+
+        /// <summary>
+        /// Gets the terrarium dimensions for rendering.
+        /// </summary>
+        public (double width, double height, double depth) GetTerrariumSize()
+        {
+            return (TerrariumWidth, TerrariumHeight, TerrariumDepth);
+        }
+
         #endregion
     }
 
