@@ -456,5 +456,51 @@ namespace Artemis
         }
 
         #endregion
+
+        #region Precomputation and Scientific Computing
+
+        /// <summary>
+        /// Creates a precomputed simulation for offline/scientific processing.
+        /// </summary>
+        public static PrecomputedSimulation CreatePrecomputed(PhysicsWorld world)
+        {
+            return new PrecomputedSimulation(world);
+        }
+
+        /// <summary>
+        /// Creates a precomputed simulation with a new world.
+        /// </summary>
+        public static PrecomputedSimulation CreatePrecomputed()
+        {
+            return new PrecomputedSimulation();
+        }
+
+        /// <summary>
+        /// Creates a simulation recorder for data collection.
+        /// </summary>
+        public static SimulationRecorder CreateRecorder()
+        {
+            return new SimulationRecorder();
+        }
+
+        /// <summary>
+        /// Creates a parallel physics processor for high-performance workloads.
+        /// </summary>
+        /// <param name="threadCount">Number of threads (0 = auto-detect).</param>
+        public static ParallelPhysicsProcessor CreateParallelProcessor(int threadCount = 0)
+        {
+            return new ParallelPhysicsProcessor(threadCount);
+        }
+
+        /// <summary>
+        /// Creates a Structure of Arrays particle container for SIMD processing.
+        /// </summary>
+        /// <param name="capacity">Maximum number of particles.</param>
+        public static ParticleSoA CreateParticleSoA(int capacity)
+        {
+            return new ParticleSoA(capacity);
+        }
+
+        #endregion
     }
 }

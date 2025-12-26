@@ -13,6 +13,8 @@
 - **Combustion System**: Fire spread to flammable objects, water extinguishing
 - **Multiple Force Types**: Gravity, wind, magnetism, buoyancy, vortex, explosions, and more
 - **Material System**: Elasticity, plasticity, ductility, friction properties
+- **Scientific Computing**: Precomputation, Monte Carlo, parameter sweeps, data export
+- **High Performance**: SIMD, multithreading, parallel processing, SoA data layouts
 - **Fluent API**: Intuitive, chainable configuration
 - **Extensible**: Easy to add custom forces, bodies, and behaviors
 
@@ -775,6 +777,207 @@ public class Game1 : Game
 
 ---
 
+## Scientific Computing & Precomputation
+
+Artemis supports offline simulations for scientific analysis, parameter sweeps, and Monte Carlo methods.
+
+### Basic Precomputation
+
+```csharp
+// Setup simulation
+var world = Physics.CreateWorld();
+var ball = Physics.CreateSphere(new Vector3D(0, 100, 0), 0.5, 1.0);
+world.AddBody(ball);
+
+// Create precomputed simulation
+var sim = Physics.CreatePrecomputed(world);
+sim.SubSteps = 4;  // Physics substeps per frame
+
+// Run simulation asynchronously
+var result = await sim.RunAsync(
+    duration: 10.0,         // Simulate 10 seconds
+    timeStep: 1.0 / 60.0    // 60 FPS
+);
+
+// Analyze results
+Console.WriteLine($"Computed {result.TotalFrames} frames in {result.ComputeTime:F2}s");
+Console.WriteLine($"Real-time factor: {result.RealTimeFactor:F1}x");
+Console.WriteLine($"Energy conservation error: {result.EnergyConservationError:P2}");
+
+// Access recorded data
+var trajectory = result.Recorder.GetTrajectory(ball.Id);
+var positions = result.Recorder.GetPositionOverTime(ball.Id);
+var velocities = result.Recorder.GetVelocityOverTime(ball.Id);
+```
+
+### Parameter Sweep (Parallel)
+
+```csharp
+var sim = Physics.CreatePrecomputed();
+
+// Run 100 variations in parallel
+var results = await sim.RunParameterSweepAsync(
+    worldFactory: i =>
+    {
+        var world = Physics.CreateWorld();
+        var ball = Physics.CreateSphere(
+            new Vector3D(0, 10 + i, 0),  // Varying height
+            radius: 0.5,
+            mass: 1.0 + i * 0.1          // Varying mass
+        );
+        world.AddBody(ball);
+        return world;
+    },
+    variations: 100,
+    duration: 5.0
+);
+
+// Analyze all results
+foreach (var result in results)
+{
+    Console.WriteLine($"Variation {result.VariationIndex}: Energy error = {result.EnergyConservationError}");
+}
+```
+
+### Monte Carlo Simulation
+
+```csharp
+var sim = Physics.CreatePrecomputed();
+
+// Run 1000 random samples
+var mcResult = await sim.RunMonteCarloAsync(
+    worldFactory: random =>
+    {
+        var world = Physics.CreateWorld();
+        var ball = Physics.CreateSphere(
+            new Vector3D(
+                random.NextDouble() * 10 - 5,  // Random X
+                50 + random.NextDouble() * 10, // Random height
+                random.NextDouble() * 10 - 5   // Random Z
+            ),
+            radius: 0.5,
+            mass: 1.0
+        );
+        world.AddBody(ball);
+        return world;
+    },
+    samples: 1000,
+    duration: 10.0,
+    measurementFunc: result =>
+    {
+        // Measure final Y position
+        var lastFrame = result.Recorder.Frames.Last();
+        return lastFrame.BodyStates[0].Position.Y;
+    },
+    seed: 42  // Reproducible
+);
+
+Console.WriteLine($"Mean final Y: {mcResult.Mean:F3} ± {mcResult.StandardDeviation:F3}");
+Console.WriteLine($"95% CI: [{mcResult.Mean - mcResult.ConfidenceInterval95:F3}, {mcResult.Mean + mcResult.ConfidenceInterval95:F3}]");
+Console.WriteLine($"Range: [{mcResult.Min:F3}, {mcResult.Max:F3}]");
+```
+
+### Convergence Analysis
+
+```csharp
+var sim = Physics.CreatePrecomputed();
+
+// Test different time steps
+var convergence = await sim.RunConvergenceAnalysisAsync(
+    worldFactory: () =>
+    {
+        var world = Physics.CreateWorld();
+        world.AddBody(Physics.CreateSphere(new Vector3D(0, 10, 0), 0.5, 1.0));
+        return world;
+    },
+    duration: 5.0,
+    timeSteps: new[] { 1.0/30, 1.0/60, 1.0/120, 1.0/240 },
+    errorMetric: result => result.EnergyConservationError
+);
+
+Console.WriteLine($"Convergence rate: {convergence.ConvergenceRate:F2}");
+Console.WriteLine($"Is converging: {convergence.IsConverging}");
+```
+
+### High-Performance Parallel Processing
+
+```csharp
+// Create parallel processor (auto-detect CPU cores)
+var processor = Physics.CreateParallelProcessor();
+
+// Use Structure of Arrays for cache efficiency
+var particles = Physics.CreateParticleSoA(capacity: 1_000_000);
+
+// Add particles
+for (int i = 0; i < 500_000; i++)
+{
+    particles.Add(
+        position: new Vector3D(random.NextDouble() * 100, 50, random.NextDouble() * 100),
+        velocity: Vector3D.Zero,
+        mass: 1.0,
+        radius: 0.1,
+        lifetime: 10.0
+    );
+}
+
+// Process with SIMD acceleration
+processor.UseSIMD = true;
+processor.UpdateParticlesSIMD(particles, deltaTime: 0.016, gravity: new Vector3D(0, -9.81, 0));
+
+// Parallel collision detection
+var pairs = processor.BroadPhaseParallel(particles, cellSize: 1.0);
+processor.ResolveCollisionsParallel(particles, pairs);
+
+// Compact dead particles periodically
+particles.Compact();
+```
+
+### Data Export
+
+```csharp
+var recorder = Physics.CreateRecorder();
+recorder.TrackTrajectories = true;
+recorder.StartRecording();
+
+// ... run simulation ...
+
+// Export to CSV (for Excel, Python, R, etc.)
+recorder.ExportToCsv("simulation_data.csv");
+recorder.ExportToCsv("trajectories.csv");
+recorder.ExportEnergyToCsv("energy.csv");
+
+// Export to binary (efficient for large datasets)
+recorder.ExportToBinary("simulation.artemis");
+
+// Load binary data later
+var loaded = SimulationRecorder.ImportFromBinary("simulation.artemis");
+```
+
+### Streaming for Large Simulations
+
+```csharp
+// For very long simulations, stream directly to disk
+var sim = Physics.CreatePrecomputed(world);
+
+await sim.RunStreamingAsync(
+    duration: 3600.0,     // 1 hour simulation
+    timeStep: 1.0 / 60.0,
+    outputPath: "long_simulation.stream"
+);
+
+// Read back frame by frame (low memory)
+foreach (var frame in PrecomputedSimulation.ReadStreamingData("long_simulation.stream"))
+{
+    Console.WriteLine($"Frame {frame.FrameIndex}, Time {frame.Time:F3}s");
+    foreach (var (bodyId, data) in frame.BodyData)
+    {
+        Console.WriteLine($"  {bodyId}: pos={data.pos}");
+    }
+}
+```
+
+---
+
 ## Performance Tips
 
 1. **Use spatial partitioning**: For >100 bodies, the engine uses spatial hashing automatically
@@ -783,6 +986,10 @@ public class Game1 : Game
 4. **Substeps**: More substeps = more stable but slower
 5. **Particle limits**: Keep particle counts reasonable (<50,000 for real-time)
 6. **Fluid resolution**: Larger smoothing radius = fewer particles needed
+7. **Use ParticleSoA**: For >10,000 particles, use Structure of Arrays layout
+8. **Enable SIMD**: `processor.UseSIMD = true` for vectorized math
+9. **Parallel processing**: Use `CreateParallelProcessor()` for multi-core systems
+10. **Streaming export**: Use `RunStreamingAsync()` for long simulations to avoid memory issues
 
 ---
 
@@ -814,6 +1021,10 @@ public class Game1 : Game
 | `CreateBonfire(pos)` | Create large bonfire preset |
 | `CreateExplosionFire(pos, radius)` | Create explosion fireball |
 | `CreateCombustionSystem()` | Create fire/water interaction system |
+| `CreatePrecomputed(world)` | Create precomputed simulation |
+| `CreateRecorder()` | Create simulation recorder |
+| `CreateParallelProcessor()` | Create parallel physics processor |
+| `CreateParticleSoA(capacity)` | Create SoA particle container |
 
 ---
 
