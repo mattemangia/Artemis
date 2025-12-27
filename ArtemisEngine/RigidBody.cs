@@ -19,6 +19,9 @@ public class RigidBody
     public bool IsKinematic { get; set; }
     public bool IsTrigger { get; set; } // Sensor - no physical collision
 
+    // Continuous Collision Detection
+    public bool UseCCD { get; set; } = false; // Enable for fast-moving objects
+
     // Sleeping system
     public bool IsSleeping { get; set; }
     public bool CanSleep { get; set; } = true;

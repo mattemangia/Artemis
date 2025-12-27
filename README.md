@@ -110,6 +110,65 @@ dotnet run --project AdvancedPhysicsDemo/AdvancedPhysicsDemo.csproj
 - **RopeJoint**: Vincolo di distanza massima
 - Tutti i joint supportano stiffness configurabile
 
+### Continuous Collision Detection (CCD)
+- **Swept Collision**: Previene il tunneling per oggetti veloci
+- **Time of Impact (TOI)**: Calcolo preciso del momento d'impatto
+- **Conservative Advancement**: Algoritmo iterativo per forme complesse
+- Abilitabile per singoli corpi con `UseCCD = true`
+
+### Forme Avanzate
+- **PolygonShape**: Poligoni convessi arbitrari (triangoli, pentagoni, esagoni, ecc.)
+- **CompoundShape**: Forme composite da più shape semplici
+- **EdgeShape**: Segmenti per terreni statici
+- Creazione procedurale di poligoni regolari
+
+### Area Effectors
+Effetti ambientali che influenzano i corpi in un'area:
+- **DirectionalForce**: Vento, correnti d'acqua, gravità direzionale
+- **RadialForce**: Pozzi gravitazionali, esplosioni, campi magnetici
+- **Buoyancy**: Simulazione acqua con galleggiamento e resistenza
+- **Vortex**: Tornado, mulinelli, vortici
+- **Point**: Forze puntuali (attrazioni/repulsioni)
+- Filtri per layer e tag per controllo preciso
+
+### One-Way Platforms
+- Piattaforme attraversabili da una direzione
+- **JumpThrough**: Piattaforme su cui si può saltare dal basso
+- **FallThrough**: Piattaforme che si possono attraversare dall'alto
+- Configurabili con soglia di velocità personalizzabile
+
+### Solver Avanzato
+- **Sequential Impulse Solver**: Risoluzione iterativa per maggiore stabilità
+- **Contact Persistence**: Mantiene i contatti tra frame
+- **Warm Starting**: Usa impulsi precedenti per convergenza più veloce
+- **Coulomb Friction**: Modello di attrito realistico con cono di attrito
+- **Baumgarte Stabilization**: Correzione della penetrazione graduale
+- Configurabile: numero di iterazioni velocità/posizione, tolleranza
+
+### Fisica Scientifica
+Sistema completo per applicazioni scientifiche e simulazioni ad alta precisione:
+
+#### Metodi di Integrazione Avanzati
+- **Euler**: Integrazione base (veloce ma meno precisa)
+- **Semi-Implicit Euler**: Stabile ed efficiente per giochi
+- **Verlet**: Migliore conservazione dell'energia
+- **Runge-Kutta 4 (RK4)**: Massima precisione per simulazioni scientifiche
+
+#### Energy Tracking
+- Monitoraggio energia cinetica, potenziale e rotazionale
+- Calcolo drift energetico (perdita/guadagno energia nel tempo)
+- Percentuale di deriva per validare la simulazione
+
+#### Deterministic Physics
+- Simulazioni riproducibili con seed fisso
+- Stesse condizioni iniziali = stessi risultati
+- Essenziale per testing e replay
+
+#### Data Export
+- Esportazione dati in CSV per analisi
+- Registrazione posizione, velocità, rotazione, energia per frame
+- Integrabile con Python, MATLAB, Excel per post-processing
+
 ### Materiali
 Ogni materiale ha proprietà uniche:
 
@@ -133,12 +192,19 @@ Il progetto è diviso in due componenti principali:
    - `Vector2.cs`: Matematica vettoriale 2D
    - `RigidBody.cs`: Corpi rigidi e forme con proprietà fisiche avanzate
    - `PhysicsWorld.cs`: Simulazione del mondo fisico con spatial partitioning
+   - `CollisionDetection.cs`: SAT e algoritmi di collision detection avanzati
    - `Raycasting.cs`: Sistema di raycast per linee di vista e proiettili
    - `CollisionLayers.cs`: Sistema di layer per filtraggio collisioni
    - `CollisionEvents.cs`: Eventi e callback per collisioni
    - `SleepingSystem.cs`: Ottimizzazione per corpi inattivi
    - `Joints.cs`: Constraints e collegamenti tra corpi
    - `SpatialPartitioning.cs`: Spatial hash grid e quadtree
+   - `ContinuousCollision.cs`: CCD per prevenire tunneling
+   - `AdvancedShapes.cs`: Poligoni, forme composite, edge shapes
+   - `AreaEffectors.cs`: Effetti ambientali (vento, gravità, buoyancy)
+   - `OneWayPlatform.cs`: Piattaforme attraversabili
+   - `ConstraintSolver.cs`: Sequential Impulse solver con warm starting
+   - `ScientificPhysics.cs`: Integratori avanzati, energy tracking, data export
 
 2. **PhysicsCatapultDemo**: Gioco dimostrativo
    - `Material.cs`: Definizione dei materiali
@@ -232,6 +298,115 @@ world.OnCollisionEnter += (sender, e) =>
     Console.WriteLine($"Collisione tra {e.BodyA} e {e.BodyB}");
     // Applicare danno, suoni, effetti, ecc.
 };
+```
+
+### Continuous Collision Detection (CCD)
+```csharp
+// Abilitare CCD per proiettili veloci (previene tunneling)
+var bullet = new RigidBody(new Vector2(0, 0), 0.1f, new CircleShape(0.2f));
+bullet.UseCCD = true; // Usa swept collision detection
+bullet.Velocity = new Vector2(100, 0); // Velocità molto alta
+
+world.AddBody(bullet);
+```
+
+### Forme Avanzate
+```csharp
+// Creare un poligono regolare (esagono)
+var hexagon = PolygonShape.CreateRegular(sides: 6, radius: 2.0f);
+var hexBody = new RigidBody(new Vector2(10, 10), 5f, hexagon);
+
+// Creare una forma composita (es. corpo umano)
+var compound = new CompoundShape();
+compound.AddShape(new CircleShape(1f), new Vector2(0, 2)); // Testa
+compound.AddShape(new BoxShape(1.5f, 2f), new Vector2(0, 0)); // Torso
+var character = new RigidBody(new Vector2(5, 5), 10f, compound);
+
+world.AddBody(hexBody);
+world.AddBody(character);
+```
+
+### Area Effectors
+```csharp
+// Creare una zona con vento
+var wind = new DirectionalForceEffector(
+    center: new Vector2(20, 20),
+    radius: 10f,
+    force: new Vector2(50, 0), // Vento verso destra
+    drag: 0.1f
+);
+world.AddAreaEffector(wind);
+
+// Creare una zona di galleggiamento (acqua)
+var water = new BuoyancyEffector(
+    center: new Vector2(30, 5),
+    radius: 15f,
+    density: 1.0f, // Densità dell'acqua
+    linearDrag: 2.0f,
+    angularDrag: 0.5f
+);
+water.FlowVelocity = new Vector2(2, 0); // Corrente
+world.AddAreaEffector(water);
+
+// Pozzo gravitazionale (buco nero)
+var gravityWell = new RadialForceEffector(
+    center: new Vector2(50, 50),
+    radius: 20f,
+    strength: -100f, // Negativo = attrazione
+    falloff: RadialFalloff.InverseSquare
+);
+world.AddAreaEffector(gravityWell);
+```
+
+### One-Way Platforms
+```csharp
+// Creare piattaforma jump-through (salta dal basso)
+var platform = new RigidBody(new Vector2(20, 10), 0, new BoxShape(10f, 1f));
+platform.IsStatic = true;
+platform.SetOneWayPlatform(OneWayPlatformBehavior.CreateJumpThrough());
+
+world.AddBody(platform);
+```
+
+### Solver Avanzato e Fisica Scientifica
+```csharp
+// Configurare il solver avanzato
+world.UseAdvancedSolver = true; // Abilita Sequential Impulse solver
+
+// Usare integrazione RK4 per massima precisione
+var body = new RigidBody(new Vector2(0, 50), 10f, new CircleShape(1f));
+world.AddBody(body);
+
+// Definire funzione accelerazione personalizzata
+Func<Vector2, Vector2, Vector2> accelFunc = (pos, vel) =>
+{
+    // Gravità + attrito aria
+    Vector2 gravity = new Vector2(0, -9.81f);
+    Vector2 drag = -vel * 0.1f;
+    return gravity + drag;
+};
+
+// Applicare RK4 nel game loop
+AdvancedIntegration.RK4Integration(body, accelFunc, deltaTime);
+
+// Monitorare energia per validare conservazione
+var energyTracker = new EnergyTracker();
+energyTracker.GravityMagnitude = 9.81f;
+energyTracker.UpdateEnergy(world.Bodies);
+
+float initialEnergy = energyTracker.TotalEnergy;
+// ... simulazione ...
+energyTracker.UpdateEnergy(world.Bodies);
+float energyDrift = energyTracker.GetEnergyDriftPercentage(initialEnergy);
+Console.WriteLine($"Energy drift: {energyDrift:F2}%");
+
+// Esportare dati per analisi
+var exporter = new SimulationDataExporter();
+// Nel game loop:
+exporter.RecordFrame(world.Bodies, deltaTime);
+// Alla fine:
+string csv = exporter.ExportToCSV();
+File.WriteAllText("simulation_data.csv", csv);
 ```
 
 ## Requisiti
