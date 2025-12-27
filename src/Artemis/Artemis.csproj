@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net6.0;net7.0;net8.0;netstandard2.1</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+
+    <!-- Package Information -->
+    <PackageId>Artemis.Physics</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Artemis Team</Authors>
+    <Company>Artemis Physics Engine</Company>
+    <Product>Artemis Physics Engine</Product>
+    <Description>A lightweight, extensible physics engine for scientific simulations and game development. Compatible with Unity, MonoGame, and other C# frameworks.</Description>
+    <Copyright>Copyright © 2024 Artemis Team</Copyright>
+    <PackageTags>physics;simulation;game-development;unity;monogame;particles;rigid-body;collision</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/artemis-physics/artemis</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+
+    <!-- Assembly Information -->
+    <AssemblyName>Artemis</AssemblyName>
+    <RootNamespace>Artemis</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <!-- Build Output -->
+    <OutputType>Library</OutputType>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <Optimize>true</Optimize>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <DebugType>full</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+  </PropertyGroup>
+
+</Project>
