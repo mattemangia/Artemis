@@ -269,7 +269,7 @@ namespace Artemis.Demo
                         py += (_random.NextDouble() - 0.5) * ParticleRadius * 0.3;
                         pz += (_random.NextDouble() - 0.5) * ParticleRadius * 0.3;
 
-                        _simulation.AddParticle(new Vector3D(px, py, pz), Vector3D.Zero, color);
+                        _simulation.AddParticle(new Vector3D(px, py, pz), color, ParticleRadius);
                     }
                 }
             }

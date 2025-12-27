@@ -29,7 +29,7 @@ class Program
 
 public class SandTetrisWindow : GameWindow
 {
-    private SandTetris3D _game = null!;
+    private Artemis.Demo.SandTetris3D _game = null!;
 
     // Camera
     private Vector3 _cameraPosition = new Vector3(12f, 15f, 18f);
@@ -72,7 +72,7 @@ public class SandTetrisWindow : GameWindow
         GL.Enable(EnableCap.CullFace);
 
         // Initialize game
-        _game = new SandTetris3D(true);
+        _game = new Artemis.Demo.SandTetris3D(true);
 
         // Create shaders
         CreateShaders();

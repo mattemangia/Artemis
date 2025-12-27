@@ -1,4 +1,5 @@
 using FontStashSharp;
+using FontStashSharp.Interfaces;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using System.Numerics;
@@ -106,7 +107,7 @@ public class TextRenderer : IDisposable
 /// <summary>
 /// Simple texture renderer for FontStashSharp integration with OpenGL
 /// </summary>
-public class TextureRenderer : IFontStashRenderer, IDisposable
+public class TextureRenderer : IFontStashRenderer, ITexture2DManager, IDisposable
 {
     private int _shaderProgram;
     private int _vao;
@@ -271,15 +272,41 @@ public class TextureRenderer : IFontStashRenderer, IDisposable
         _isDrawing = false;
     }
 
-    public void Draw(object texture, System.Numerics.Vector2 pos, System.Drawing.Rectangle? src, FSColor color, float rotation,
-        System.Numerics.Vector2 origin, System.Numerics.Vector2 scale, float depth)
+    public ITexture2DManager TextureManager => this;
+
+    public object CreateTexture(int width, int height)
     {
+        return new Texture2D(width, height);
+    }
+
+    public System.Drawing.Point GetTextureSize(object texture)
+    {
+        if (texture is Texture2D tex)
+        {
+            return new System.Drawing.Point(tex.Width, tex.Height);
+        }
+
+        return System.Drawing.Point.Empty;
+    }
+
+    public void SetTextureData(object texture, System.Drawing.Rectangle bounds, byte[] data)
+    {
+        if (texture is Texture2D tex)
+        {
+            tex.SetData(bounds, data);
+        }
+    }
+
+    public void Draw(object texture, System.Numerics.Vector2 pos, System.Drawing.Rectangle? src, FSColor color, float rotation,
+        System.Numerics.Vector2 origin, float scale)
+    {
+        var scaleVector = new System.Numerics.Vector2(scale, scale);
         if (!_textureIds.TryGetValue(texture, out int textureId))
         {
             // Create OpenGL texture from FontStashSharp texture
             if (texture is Texture2D fsTexture)
             {
-                textureId = CreateTexture(fsTexture);
+                textureId = CreateGlTexture(fsTexture);
                 _textureIds[texture] = textureId;
             }
         }
@@ -288,10 +315,10 @@ public class TextureRenderer : IFontStashRenderer, IDisposable
 
         var srcRect = src ?? new System.Drawing.Rectangle(0, 0, 1, 1);
 
-        float x = pos.X - origin.X * scale.X;
-        float y = pos.Y - origin.Y * scale.Y;
-        float w = srcRect.Width * scale.X;
-        float h = srcRect.Height * scale.Y;
+        float x = pos.X - origin.X * scaleVector.X;
+        float y = pos.Y - origin.Y * scaleVector.Y;
+        float w = srcRect.Width * scaleVector.X;
+        float h = srcRect.Height * scaleVector.Y;
 
         // UV coordinates
         float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
@@ -318,7 +345,7 @@ public class TextureRenderer : IFontStashRenderer, IDisposable
         _indices.Add(startIndex + 3);
     }
 
-    private int CreateTexture(Texture2D fsTexture)
+    private int CreateGlTexture(Texture2D fsTexture)
     {
         int textureId = GL.GenTexture();
         GL.BindTexture(TextureTarget.Texture2D, textureId);
@@ -368,7 +395,7 @@ public struct VertexPositionColorTexture
 /// <summary>
 /// FontStashSharp texture wrapper
 /// </summary>
-public class Texture2D : ITexture2D
+public class Texture2D
 {
     private int _textureId;
     private byte[]? _pixelData;
