@@ -1065,5 +1065,67 @@ namespace Artemis
         }
 
         #endregion
+
+        #region Cloth Simulation
+
+        /// <summary>
+        /// Creates a cloth simulation.
+        /// </summary>
+        /// <param name="origin">Top-left corner position.</param>
+        /// <param name="width">Number of particles horizontally.</param>
+        /// <param name="height">Number of particles vertically.</param>
+        /// <param name="spacing">Distance between particles.</param>
+        /// <param name="material">Optional cloth material.</param>
+        public static ClothSimulation CreateCloth(
+            System.Numerics.Vector3 origin,
+            int width,
+            int height,
+            float spacing,
+            ClothMaterial? material = null)
+        {
+            return new ClothSimulation(origin, width, height, spacing, material);
+        }
+
+        /// <summary>
+        /// Creates cotton cloth material.
+        /// </summary>
+        public static ClothMaterial CottonCloth() => ClothMaterial.Cotton();
+
+        /// <summary>
+        /// Creates silk cloth material.
+        /// </summary>
+        public static ClothMaterial SilkCloth() => ClothMaterial.Silk();
+
+        /// <summary>
+        /// Creates denim cloth material.
+        /// </summary>
+        public static ClothMaterial DenimCloth() => ClothMaterial.Denim();
+
+        /// <summary>
+        /// Creates leather material.
+        /// </summary>
+        public static ClothMaterial LeatherCloth() => ClothMaterial.Leather();
+
+        /// <summary>
+        /// Creates rubber material.
+        /// </summary>
+        public static ClothMaterial RubberCloth() => ClothMaterial.Rubber();
+
+        /// <summary>
+        /// Creates flag material (lightweight, no tearing).
+        /// </summary>
+        public static ClothMaterial FlagCloth() => ClothMaterial.Flag();
+
+        /// <summary>
+        /// Creates sail material (strong, high wind resistance).
+        /// </summary>
+        public static ClothMaterial SailCloth() => ClothMaterial.Sail();
+
+        /// <summary>
+        /// Creates curtain material.
+        /// </summary>
+        public static ClothMaterial CurtainCloth() => ClothMaterial.Curtain();
+
+        #endregion
     }
 }

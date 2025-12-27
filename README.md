@@ -15,6 +15,7 @@
 - **Combustion System**: Fire spread to flammable objects, water extinguishing
 - **Fracture/Destruction**: Realistic shattering with Voronoi, radial, shatter patterns
 - **Erodible Objects**: Sand sculptures, snowballs that erode particle-by-particle
+- **Cloth Simulation**: Realistic fabric with wind, collisions, and tearing
 - **Physics Modifiers**: Wind, gravity zones, attractors, vortex, turbulence
 - **Multiple Force Types**: Gravity, wind, magnetism, buoyancy, vortex, explosions, and more
 - **Material System**: Elasticity, plasticity, ductility, friction properties
@@ -1804,6 +1805,136 @@ slope.ApplyWeathering(deltaTime);
 
 ---
 
+## Cloth Simulation
+
+Realistic cloth simulation with force interaction, collisions, and tearing.
+
+### Basic Usage
+
+```csharp
+// Create cloth mesh (40x30 particles, 0.1m spacing)
+var cloth = Physics.CreateCloth(
+    origin: new Vector3(0, 5, 0),
+    width: 40,
+    height: 30,
+    spacing: 0.1f,
+    material: Physics.CottonCloth()
+);
+
+// Pin top edge (like hanging from a rod)
+cloth.PinTopEdge();
+
+// Or pin just corners
+cloth.PinCorners();
+
+// Set gravity and wind
+cloth.Gravity = new Vector3(0, -9.81f, 0);
+cloth.Wind = new Vector3(5, 0, 2);
+cloth.WindTurbulence = 0.3f;
+
+// Update each frame
+cloth.Update(deltaTime);
+
+// Render vertices
+foreach (var (pos, normal, uv) in cloth.GetRenderVertices())
+{
+    // Draw triangle with pos, normal, uv
+}
+```
+
+### Cloth Materials
+
+```csharp
+var cotton = Physics.CottonCloth();     // Light, flexible
+var silk = Physics.SilkCloth();         // Very light, smooth
+var denim = Physics.DenimCloth();       // Heavy, stiff
+var leather = Physics.LeatherCloth();   // Very stiff, durable
+var rubber = Physics.RubberCloth();     // Stretchy
+var flag = Physics.FlagCloth();         // Light, no tearing
+var sail = Physics.SailCloth();         // Strong, high wind resistance
+var curtain = Physics.CurtainCloth();   // Medium weight
+```
+
+### Force Interaction
+
+```csharp
+// Apply wind from a wind modifier
+var wind = Physics.CreateStrongWind(Vector3D.Right);
+cloth.ApplyWind(wind);
+
+// Add custom force callback
+cloth.AddForce(position => {
+    // Example: radial force from explosion
+    Vector3 toExplosion = explosionCenter - position;
+    float dist = toExplosion.Length();
+    if (dist < explosionRadius)
+    {
+        return Vector3.Normalize(toExplosion) * explosionForce * (1 - dist / explosionRadius);
+    }
+    return Vector3.Zero;
+});
+
+// Apply impulse at a point (e.g., from projectile)
+cloth.ApplyImpulse(hitPoint, impulseVector, radius: 0.5f);
+```
+
+### Collisions
+
+```csharp
+// Add sphere collider (e.g., character's head)
+cloth.AddSphereCollider(center: headPosition, radius: 0.15f);
+
+// Moving sphere (update position each frame)
+cloth.AddSphereCollider(Vector3.Zero, 0.2f, _ => characterPosition);
+
+// Add plane collider (e.g., floor)
+cloth.AddPlaneCollider(point: Vector3.Zero, normal: Vector3.UnitY);
+
+// Add box collider
+cloth.AddBoxCollider(min: new Vector3(-1, 0, -1), max: new Vector3(1, 2, 1));
+
+// Handle collision events
+cloth.OnCollision += collision =>
+{
+    Console.WriteLine($"Cloth hit at {collision.ContactPoint}");
+};
+```
+
+### Tearing
+
+```csharp
+// Enable tearing
+cloth.Material.CanTear = true;
+cloth.Material.TearThreshold = 5f;  // Lower = easier to tear
+
+// Manual tear along a line
+cloth.Tear(
+    start: new Vector3(0, 3, 0),
+    end: new Vector3(2, 3, 0),
+    width: 0.1f
+);
+
+// Handle tear events
+cloth.OnConstraintBreak += constraint =>
+{
+    Console.WriteLine("Cloth torn!");
+    // Spawn particles, play sound, etc.
+};
+```
+
+### Interactive Cloth
+
+```csharp
+// Move pinned particle (e.g., for dragging)
+cloth.MovePinnedParticle(x: 0, y: 0, newPosition: mouseWorldPosition);
+
+// Pin/unpin dynamically
+cloth.PinParticle(x, y);
+cloth.UnpinParticle(x, y);
+```
+
+---
+
 ## State Transfer & Time Reversal
 
 Capture, save, and reverse physics states.
@@ -2112,6 +2243,59 @@ void Shoot(Vector3D origin, Vector3D direction)
 | `CreateRecorder()` | Create simulation recorder |
 | `CreateParallelProcessor()` | Create parallel physics processor |
 | `CreateParticleSoA(capacity)` | Create SoA particle container |
+| **G-Force System** | |
+| `CreateGForceSystem()` | Create G-force tracking system |
+| `HumanGForceLimits()` | G-force limits for humans (5G sustained) |
+| `PilotGForceLimits()` | G-force limits for pilots (9G sustained) |
+| `AircraftGForceLimits()` | G-force limits for aircraft (9G sustained) |
+| `SpacecraftGForceLimits()` | G-force limits for spacecraft |
+| `FragileGForceLimits()` | G-force limits for fragile objects |
+| **Orbital Mechanics** | |
+| `CreateOrbitalMechanics()` | Create orbital mechanics simulation |
+| `CreateCelestialBody(name, mass, radius, pos)` | Create celestial body |
+| `CreateEarth()` | Create Earth celestial body |
+| `CreateMoon()` | Create Moon celestial body |
+| `CreateSun()` | Create Sun celestial body |
+| `CreateMars()` | Create Mars celestial body |
+| **Propulsion Systems** | |
+| `CreatePropulsionSystem()` | Create propulsion system manager |
+| `CreateFalcon9()` | Create Falcon 9 rocket preset |
+| `CreateSaturnV()` | Create Saturn V rocket preset |
+| `CreateIonProbe()` | Create ion propulsion probe |
+| `CreateMerlin1DEngine()` | Create Merlin 1D engine |
+| `CreateRaptorEngine()` | Create Raptor engine |
+| `CreateIonThruster()` | Create ion thruster |
+| `CreateRCSThruster()` | Create RCS thruster |
+| **Planet Gravity** | |
+| `CreatePlanetGravitySystem()` | Create N-body gravity system |
+| `CreateGravitationalBody(mass, radius, pos)` | Create gravitational body |
+| `CreateEarthGravity()` | Create Earth gravity body |
+| `CreateMoonGravity()` | Create Moon gravity body |
+| `CreateGamePlanet(radius, surfaceGravity)` | Create game-scale planet |
+| `CreatePointGravity(center, strength, radius)` | Create point gravity (Mario Galaxy style) |
+| `CreateMultiPointGravity()` | Create multi-point gravity system |
+| **Slope Stability** | |
+| `CreateSlopeStabilitySystem()` | Create slope stability system |
+| `RockMaterial()` | Rock slope material (45° repose) |
+| `GravelMaterial()` | Gravel slope material (35° repose) |
+| `SandMaterial()` | Sand slope material (34° repose) |
+| `ClayMaterial()` | Clay slope material (25° repose) |
+| `SoilMaterial()` | Soil slope material (30° repose) |
+| `IceMaterial()` | Ice slope material (35° repose) |
+| `SnowMaterial()` | Snow slope material (38° repose) |
+| **State Transfer** | |
+| `CreateStateTransfer()` | Create state transfer system |
+| `CreateSimulationRecorder()` | Create simulation recorder for playback |
+| **Cloth Simulation** | |
+| `CreateCloth(origin, width, height, spacing)` | Create cloth mesh |
+| `CottonCloth()` | Cotton cloth material |
+| `SilkCloth()` | Silk cloth material |
+| `DenimCloth()` | Denim cloth material |
+| `LeatherCloth()` | Leather material |
+| `RubberCloth()` | Rubber material |
+| `FlagCloth()` | Flag material (no tearing) |
+| `SailCloth()` | Sail material (high wind resistance) |
+| `CurtainCloth()` | Curtain material |
 | **Object Pools** | |
 | `CreatePool<T>()` | Create generic object pool |
 | `CreateListPool<T>()` | Create list pool |
