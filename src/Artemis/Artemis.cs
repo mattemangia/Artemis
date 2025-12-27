@@ -1408,6 +1408,105 @@ namespace Artemis
         /// </summary>
         public static Projectile GolfBall() => Projectile.GolfBall();
 
+        #region Catapult & Siege Weapons
+
+        /// <summary>
+        /// Creates an Angry Birds style red bird.
+        /// </summary>
+        public static Projectile AngryBirdRed() => Projectile.AngryBirdRed();
+
+        /// <summary>
+        /// Creates an Angry Birds style yellow bird (speed boost).
+        /// </summary>
+        public static Projectile AngryBirdYellow() => Projectile.AngryBirdYellow();
+
+        /// <summary>
+        /// Creates an Angry Birds style big bird (heavy hitter).
+        /// </summary>
+        public static Projectile AngryBirdBig() => Projectile.AngryBirdBig();
+
+        /// <summary>
+        /// Creates an Angry Birds style bomb bird.
+        /// </summary>
+        public static Projectile AngryBirdBomb() => Projectile.AngryBirdBomb();
+
+        /// <summary>
+        /// Creates a catapult stone projectile.
+        /// </summary>
+        public static Projectile CatapultStone() => Projectile.CatapultStone();
+
+        /// <summary>
+        /// Creates a catapult boulder projectile.
+        /// </summary>
+        public static Projectile CatapultBoulder() => Projectile.CatapultBoulder();
+
+        /// <summary>
+        /// Creates a trebuchet stone projectile.
+        /// </summary>
+        public static Projectile TrebuchetStone() => Projectile.TrebuchetStone();
+
+        /// <summary>
+        /// Creates a heavy trebuchet projectile (castle breaker).
+        /// </summary>
+        public static Projectile TrebuchetHeavy() => Projectile.TrebuchetHeavy();
+
+        /// <summary>
+        /// Creates a ballista bolt projectile.
+        /// </summary>
+        public static Projectile BallistaBolt() => Projectile.BallistaBolt();
+
+        /// <summary>
+        /// Creates an onager stone projectile.
+        /// </summary>
+        public static Projectile OnagerStone() => Projectile.OnagerStone();
+
+        /// <summary>
+        /// Creates a sling stone projectile.
+        /// </summary>
+        public static Projectile SlingStone() => Projectile.SlingStone();
+
+        /// <summary>
+        /// Creates a water balloon projectile.
+        /// </summary>
+        public static Projectile WaterBalloon() => Projectile.WaterBalloon();
+
+        /// <summary>
+        /// Creates a snowball projectile.
+        /// </summary>
+        public static Projectile Snowball() => Projectile.Snowball();
+
+        /// <summary>
+        /// Creates a bocce ball projectile.
+        /// </summary>
+        public static Projectile BocceBall() => Projectile.BocceBall();
+
+        /// <summary>
+        /// Creates a bowling ball projectile.
+        /// </summary>
+        public static Projectile BowlingBall() => Projectile.BowlingBall();
+
+        /// <summary>
+        /// Creates a pumpkin projectile (pumpkin chunkin).
+        /// </summary>
+        public static Projectile Pumpkin() => Projectile.Pumpkin();
+
+        /// <summary>
+        /// Creates a watermelon projectile.
+        /// </summary>
+        public static Projectile Watermelon() => Projectile.Watermelon();
+
+        /// <summary>
+        /// Creates a piano projectile (cartoon physics).
+        /// </summary>
+        public static Projectile Piano() => Projectile.Piano();
+
+        /// <summary>
+        /// Creates an anvil projectile (cartoon physics).
+        /// </summary>
+        public static Projectile Anvil() => Projectile.Anvil();
+
+        #endregion
+
         /// <summary>
         /// Creates a custom projectile.
         /// </summary>

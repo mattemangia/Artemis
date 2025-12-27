@@ -166,6 +166,219 @@ namespace Artemis.Simulation
             SpinRate = 300f         // Backspin
         };
 
+        #region Catapult & Siege Weapons
+
+        /// <summary>Angry Birds style red bird (small, fast).</summary>
+        public static Projectile AngryBirdRed() => new()
+        {
+            Name = "Red Bird",
+            Mass = 1.0f,            // 1kg
+            Diameter = 0.15f,       // 15cm
+            DragCoefficient = 0.47f, // Sphere
+            MuzzleVelocity = 25f,   // Slingshot launch
+            SpinRate = 0f
+        };
+
+        /// <summary>Angry Birds style yellow bird (fast, streamlined).</summary>
+        public static Projectile AngryBirdYellow() => new()
+        {
+            Name = "Yellow Bird",
+            Mass = 0.8f,            // 800g
+            Diameter = 0.12f,       // 12cm (streamlined)
+            DragCoefficient = 0.3f, // More aerodynamic
+            MuzzleVelocity = 35f,   // Speed boost ability
+            SpinRate = 0f
+        };
+
+        /// <summary>Angry Birds style big bird (heavy, slow).</summary>
+        public static Projectile AngryBirdBig() => new()
+        {
+            Name = "Big Bird",
+            Mass = 5.0f,            // 5kg
+            Diameter = 0.35f,       // 35cm
+            DragCoefficient = 0.5f,
+            MuzzleVelocity = 18f,   // Slower but powerful
+            SpinRate = 0f
+        };
+
+        /// <summary>Angry Birds style bomb bird (explosive).</summary>
+        public static Projectile AngryBirdBomb() => new()
+        {
+            Name = "Bomb Bird",
+            Mass = 3.0f,            // 3kg
+            Diameter = 0.25f,       // 25cm
+            DragCoefficient = 0.47f,
+            MuzzleVelocity = 22f,
+            SpinRate = 0f
+        };
+
+        /// <summary>Small catapult stone.</summary>
+        public static Projectile CatapultStone() => new()
+        {
+            Name = "Catapult Stone",
+            Mass = 5f,              // 5kg stone
+            Diameter = 0.15f,       // 15cm
+            DragCoefficient = 0.47f, // Rough sphere
+            MuzzleVelocity = 30f,   // ~108 km/h
+            SpinRate = 0f
+        };
+
+        /// <summary>Large catapult boulder.</summary>
+        public static Projectile CatapultBoulder() => new()
+        {
+            Name = "Catapult Boulder",
+            Mass = 50f,             // 50kg boulder
+            Diameter = 0.4f,        // 40cm
+            DragCoefficient = 0.5f,
+            MuzzleVelocity = 25f,   // ~90 km/h
+            SpinRate = 0f
+        };
+
+        /// <summary>Trebuchet stone (medieval siege).</summary>
+        public static Projectile TrebuchetStone() => new()
+        {
+            Name = "Trebuchet Stone",
+            Mass = 100f,            // 100kg
+            Diameter = 0.5f,        // 50cm
+            DragCoefficient = 0.47f,
+            MuzzleVelocity = 50f,   // ~180 km/h, higher arc
+            SpinRate = 0f
+        };
+
+        /// <summary>Trebuchet heavy projectile (castle breaker).</summary>
+        public static Projectile TrebuchetHeavy() => new()
+        {
+            Name = "Trebuchet Heavy",
+            Mass = 200f,            // 200kg
+            Diameter = 0.7f,        // 70cm
+            DragCoefficient = 0.5f,
+            MuzzleVelocity = 40f,   // ~144 km/h
+            SpinRate = 0f
+        };
+
+        /// <summary>Ballista bolt (giant crossbow).</summary>
+        public static Projectile BallistaBolt() => new()
+        {
+            Name = "Ballista Bolt",
+            Mass = 2f,              // 2kg
+            Diameter = 0.05f,       // 5cm shaft
+            DragCoefficient = 0.3f, // Streamlined
+            MuzzleVelocity = 60f,   // ~216 km/h
+            SpinRate = 0f
+        };
+
+        /// <summary>Onager stone (Roman siege weapon).</summary>
+        public static Projectile OnagerStone() => new()
+        {
+            Name = "Onager Stone",
+            Mass = 30f,             // 30kg
+            Diameter = 0.3f,        // 30cm
+            DragCoefficient = 0.47f,
+            MuzzleVelocity = 35f,   // ~126 km/h
+            SpinRate = 0f
+        };
+
+        /// <summary>Sling stone (David vs Goliath).</summary>
+        public static Projectile SlingStone() => new()
+        {
+            Name = "Sling Stone",
+            Mass = 0.05f,           // 50g
+            Diameter = 0.03f,       // 3cm
+            DragCoefficient = 0.47f,
+            MuzzleVelocity = 35f,   // ~126 km/h (skilled slinger)
+            SpinRate = 0f
+        };
+
+        /// <summary>Water balloon.</summary>
+        public static Projectile WaterBalloon() => new()
+        {
+            Name = "Water Balloon",
+            Mass = 0.3f,            // 300g (filled)
+            Diameter = 0.1f,        // 10cm
+            DragCoefficient = 0.47f,
+            MuzzleVelocity = 15f,   // Thrown
+            SpinRate = 0f
+        };
+
+        /// <summary>Snowball.</summary>
+        public static Projectile Snowball() => new()
+        {
+            Name = "Snowball",
+            Mass = 0.15f,           // 150g
+            Diameter = 0.08f,       // 8cm
+            DragCoefficient = 0.5f,
+            MuzzleVelocity = 20f,   // Thrown
+            SpinRate = 0f
+        };
+
+        /// <summary>Bocce ball.</summary>
+        public static Projectile BocceBall() => new()
+        {
+            Name = "Bocce Ball",
+            Mass = 0.92f,           // 920g
+            Diameter = 0.107f,      // 107mm
+            DragCoefficient = 0.47f,
+            MuzzleVelocity = 8f,    // Tossed underhand
+            SpinRate = 0f
+        };
+
+        /// <summary>Bowling ball (for extreme physics).</summary>
+        public static Projectile BowlingBall() => new()
+        {
+            Name = "Bowling Ball",
+            Mass = 7.26f,           // 16 lbs max
+            Diameter = 0.218f,      // 8.5 inches
+            DragCoefficient = 0.47f,
+            MuzzleVelocity = 10f,   // Rolled/thrown
+            SpinRate = 50f          // Hook spin
+        };
+
+        /// <summary>Pumpkin (pumpkin chunkin).</summary>
+        public static Projectile Pumpkin() => new()
+        {
+            Name = "Pumpkin",
+            Mass = 5f,              // 5kg average
+            Diameter = 0.3f,        // 30cm
+            DragCoefficient = 0.6f, // Irregular shape
+            MuzzleVelocity = 100f,  // Air cannon launch
+            SpinRate = 0f
+        };
+
+        /// <summary>Watermelon (summer fun).</summary>
+        public static Projectile Watermelon() => new()
+        {
+            Name = "Watermelon",
+            Mass = 8f,              // 8kg
+            Diameter = 0.35f,       // 35cm
+            DragCoefficient = 0.55f,
+            MuzzleVelocity = 20f,   // Catapult launch
+            SpinRate = 0f
+        };
+
+        /// <summary>Piano (for cartoon physics).</summary>
+        public static Projectile Piano() => new()
+        {
+            Name = "Piano",
+            Mass = 400f,            // 400kg upright
+            Diameter = 1.5f,        // Approximation
+            DragCoefficient = 1.2f, // Very high drag
+            MuzzleVelocity = 15f,   // Dropped from building
+            SpinRate = 0f
+        };
+
+        /// <summary>Anvil (cartoon physics).</summary>
+        public static Projectile Anvil() => new()
+        {
+            Name = "Anvil",
+            Mass = 100f,            // 100kg
+            Diameter = 0.4f,        // 40cm
+            DragCoefficient = 0.8f,
+            MuzzleVelocity = 10f,   // Dropped
+            SpinRate = 0f
+        };
+
+        #endregion
+
         #endregion
     }
 

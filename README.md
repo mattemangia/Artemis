@@ -2329,6 +2329,32 @@ var artillery = Physics.ArtilleryShell(); // 155mm HE (827 m/s)
 var baseball = Physics.Baseball();      // Pitched ball (45 m/s)
 var golf = Physics.GolfBall();          // Driver hit (70 m/s)
 
+// Angry Birds style (slingshot games)
+var redBird = Physics.AngryBirdRed();     // Standard bird (25 m/s)
+var yellowBird = Physics.AngryBirdYellow(); // Speed bird (35 m/s)
+var bigBird = Physics.AngryBirdBig();     // Heavy hitter (18 m/s)
+var bombBird = Physics.AngryBirdBomb();   // Explosive (22 m/s)
+
+// Catapult & Siege Weapons
+var stone = Physics.CatapultStone();      // 5kg stone (30 m/s)
+var boulder = Physics.CatapultBoulder();  // 50kg boulder (25 m/s)
+var trebuchet = Physics.TrebuchetStone(); // 100kg siege (50 m/s)
+var trebHeavy = Physics.TrebuchetHeavy(); // 200kg castle breaker
+var ballista = Physics.BallistaBolt();    // Giant crossbow bolt
+var onager = Physics.OnagerStone();       // Roman siege weapon
+var sling = Physics.SlingStone();         // David vs Goliath
+
+// Fun projectiles
+var waterBalloon = Physics.WaterBalloon();
+var snowball = Physics.Snowball();
+var pumpkin = Physics.Pumpkin();          // Pumpkin chunkin
+var watermelon = Physics.Watermelon();
+var bowlingBall = Physics.BowlingBall();
+
+// Cartoon physics
+var piano = Physics.Piano();              // Dropped piano
+var anvil = Physics.Anvil();              // Classic anvil drop
+
 // Custom projectile
 var custom = Physics.CreateProjectile(
     name: "Custom Bullet",
@@ -2800,6 +2826,24 @@ void Shoot(Vector3D origin, Vector3D direction)
 | `ArtilleryShell()` | 155mm HE artillery shell |
 | `Baseball()` | Baseball projectile |
 | `GolfBall()` | Golf ball projectile |
+| `AngryBirdRed()` | Angry Birds red bird |
+| `AngryBirdYellow()` | Angry Birds yellow bird (speed) |
+| `AngryBirdBig()` | Angry Birds big bird (heavy) |
+| `AngryBirdBomb()` | Angry Birds bomb bird |
+| `CatapultStone()` | Catapult stone (5kg) |
+| `CatapultBoulder()` | Catapult boulder (50kg) |
+| `TrebuchetStone()` | Trebuchet stone (100kg) |
+| `TrebuchetHeavy()` | Trebuchet heavy (200kg) |
+| `BallistaBolt()` | Ballista bolt |
+| `OnagerStone()` | Onager stone (Roman) |
+| `SlingStone()` | Sling stone |
+| `WaterBalloon()` | Water balloon |
+| `Snowball()` | Snowball |
+| `Pumpkin()` | Pumpkin (chunkin) |
+| `Watermelon()` | Watermelon |
+| `BowlingBall()` | Bowling ball |
+| `Piano()` | Piano (cartoon physics) |
+| `Anvil()` | Anvil (cartoon physics) |
 | `CreateProjectile(...)` | Custom projectile |
 | `StandardEnvironment()` | Standard sea level conditions |
 | `HighAltitudeEnvironment()` | High altitude (3000m) conditions |
