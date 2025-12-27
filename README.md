@@ -7,12 +7,18 @@
 - **Cross-Platform**: Compatible with .NET 6/7/8 and .NET Standard 2.1
 - **Game Engine Ready**: Works with Unity, MonoGame, Godot (C#), and any C# project
 - **Rigid Body Dynamics**: Full 3D physics with collision detection and resolution
+- **Real-Time Optimized**: Spatial hashing, island solver, warm starting - like PhysX
+- **GPU Compute**: OpenCL (Intel/AMD/NVIDIA), CUDA support with CPU SIMD fallback
 - **Particle Systems**: High-performance particle simulation with up to 100,000+ particles
 - **Fluid Simulation**: SPH (Smoothed Particle Hydrodynamics) for realistic liquids
 - **Smoke & Fire**: Volumetric smoke with turbulence, fire with blackbody radiation colors
 - **Combustion System**: Fire spread to flammable objects, water extinguishing
+- **Fracture/Destruction**: Realistic shattering with Voronoi, radial, shatter patterns
+- **Erodible Objects**: Sand sculptures, snowballs that erode particle-by-particle
+- **Physics Modifiers**: Wind, gravity zones, attractors, vortex, turbulence
 - **Multiple Force Types**: Gravity, wind, magnetism, buoyancy, vortex, explosions, and more
 - **Material System**: Elasticity, plasticity, ductility, friction properties
+- **SAT Collision**: Separating Axis Theorem for accurate box-box collisions
 - **Scientific Computing**: Precomputation, Monte Carlo, parameter sweeps, data export
 - **High Performance**: SIMD, multithreading, parallel processing, SoA data layouts
 - **Fluent API**: Intuitive, chainable configuration
@@ -978,6 +984,599 @@ foreach (var frame in PrecomputedSimulation.ReadStreamingData("long_simulation.s
 
 ---
 
+## Real-Time Optimized Physics
+
+For games and real-time applications requiring PhysX-like performance, use `OptimizedPhysicsWorld`:
+
+### Features
+
+- **Spatial Hashing**: O(1) average-case broad-phase collision detection
+- **Island Solver**: Groups connected bodies for parallel solving
+- **Warm Starting**: Caches impulses for faster convergence
+- **Multi-threading**: Parallel collision detection and constraint solving
+- **Object Pooling**: Reduces GC pressure for smooth frame rates
+- **CCD**: Continuous collision detection for fast-moving objects
+
+### Basic Usage
+
+```csharp
+// Create optimized world (cell size should be >= largest object)
+var world = Physics.CreateOptimizedWorld(spatialCellSize: 2.0);
+
+// Configure performance settings
+world.UseMultiThreading = true;
+world.UseWarmStarting = true;
+world.UseCCD = true;
+world.SolverIterations = 8;       // More = accurate, slower
+world.PositionIterations = 3;
+
+// Add bodies as usual
+world.AddBody(ball);
+world.AddBody(ground);
+
+// Update
+world.Update(deltaTime);
+
+// Get performance stats
+Console.WriteLine(world.GetPerformanceStats());
+// Output:
+// Bodies: 1000 (Dynamic: 800)
+// Islands: 45 (Sleeping: 12)
+// Broad Phase: 0.45ms (2340 pairs)
+// Narrow Phase: 1.23ms (156 contacts)
+// Solver: 0.89ms
+// Integration: 0.21ms
+// Spatial Hash Cells: 1234
+```
+
+### Spatial Hash for Custom Use
+
+```csharp
+// Create spatial hash
+var spatialHash = Physics.CreateSpatialHash(cellSize: 2.0);
+
+// Insert bodies
+foreach (var body in bodies)
+{
+    spatialHash.Insert(body);
+}
+
+// Query area
+var nearby = spatialHash.Query(bounds);
+
+// Get collision pairs (replaces O(n²) with O(n))
+var pairs = new List<(IPhysicsBody, IPhysicsBody)>();
+spatialHash.GetPotentialPairs(pairs);
+
+// Raycast with spatial acceleration
+foreach (var body in spatialHash.RaycastAll(origin, direction, maxDistance))
+{
+    // Process potential hits
+}
+```
+
+### Multi-Level Spatial Hash
+
+For scenes with objects of vastly different sizes:
+
+```csharp
+// Creates 4 levels from 0.5 to 16.0 cell size
+var multiHash = Physics.CreateMultiLevelSpatialHash(
+    minSize: 0.5,
+    maxSize: 16.0,
+    levels: 4
+);
+
+// Bodies automatically go to appropriate level based on size
+multiHash.Rebuild(bodies);
+```
+
+---
+
+## GPU Compute
+
+Accelerate particle physics and SPH fluids with GPU compute. Supports Intel, AMD, and NVIDIA GPUs.
+
+### Automatic Backend Selection
+
+```csharp
+// Auto-detect best available backend (CUDA > OpenCL > CPU)
+var gpu = Physics.CreateGpuCompute();
+
+Console.WriteLine($"Using: {gpu.ActiveBackend}");
+Console.WriteLine($"Device: {gpu.DeviceInfo?.Name}");
+Console.WriteLine($"Memory: {gpu.DeviceInfo?.TotalMemory / 1024 / 1024} MB");
+```
+
+### Force Specific Backend
+
+```csharp
+// Force OpenCL (works on Intel/AMD/NVIDIA)
+var gpu = Physics.CreateGpuCompute(GpuBackend.OpenCL);
+
+// Force CUDA (NVIDIA only)
+var gpu = Physics.CreateGpuCompute(GpuBackend.CUDA);
+
+// CPU with SIMD (fallback, always available)
+var gpu = Physics.CreateGpuCompute(GpuBackend.CPU);
+```
+
+### Accelerated Particle Updates
+
+```csharp
+var particles = Physics.CreateParticleSoA(100000);
+var gpu = Physics.CreateGpuCompute();
+
+// Spawn particles
+for (int i = 0; i < 100000; i++)
+{
+    particles.Add(randomPosition, Vector3D.Zero, 1.0, 0.1, 5.0);
+}
+
+// GPU-accelerated update (gravity, integration)
+gpu.UpdateParticles(particles, deltaTime: 0.016f, gravity: new Vector3D(0, -9.81, 0));
+
+// GPU-accelerated collision detection
+gpu.ComputeParticleCollisions(particles, cellSize: 0.5f);
+```
+
+### GPU SPH Fluid Simulation
+
+```csharp
+// SPH density and pressure computation on GPU
+gpu.ComputeSPH(
+    particles,
+    smoothingRadius: 0.2f,
+    restDensity: 1000f,
+    stiffness: 2000f
+);
+```
+
+### Device Selection
+
+```csharp
+var gpu = Physics.CreateGpuCompute();
+
+// List all available devices
+foreach (var device in gpu.AvailableDevices)
+{
+    Console.WriteLine($"[{device.DeviceId}] {device.Name} ({device.Backend})");
+    Console.WriteLine($"    Memory: {device.TotalMemory / 1024 / 1024} MB");
+    Console.WriteLine($"    Compute Units: {device.ComputeUnits}");
+    Console.WriteLine($"    Double Precision: {device.SupportsDouble}");
+}
+
+// Select specific device
+gpu.SelectDevice(1);
+```
+
+---
+
+## Fracture & Destruction
+
+Realistic object shattering with multiple fracture patterns.
+
+### Basic Fracture
+
+```csharp
+// Create fracture system
+var fracture = Physics.CreateFractureSystem();
+
+// Make objects fracturable
+var glassWindow = Physics.CreateBox(position, halfExtents, 10.0, MaterialPresets.Glass());
+fracture.MakeFracturable(glassWindow, Physics.GlassFracture());
+
+var woodCrate = Physics.CreateBox(position, halfExtents, 20.0, MaterialPresets.Wood());
+fracture.MakeFracturable(woodCrate, Physics.WoodFracture());
+
+// Subscribe to fracture events
+fracture.OnFracture += result =>
+{
+    Console.WriteLine($"Fractured into {result.Fragments.Count} pieces!");
+
+    // Add fragments to physics world
+    foreach (var fragment in result.Fragments)
+    {
+        world.AddBody(fragment);
+    }
+
+    // Remove original
+    world.RemoveBody(result.OriginalBody);
+
+    // Add debris particles
+    foreach (var debris in result.Debris)
+    {
+        particleSystem.Add(debris);
+    }
+};
+
+// Check collisions for fracture
+world.OnCollision += collision =>
+{
+    double impulse = CalculateImpulse(collision);
+    fracture.CheckAndFracture(collision, impulse);
+};
+```
+
+### Fracture Patterns
+
+```csharp
+// Voronoi (realistic, natural-looking)
+var voronoi = new FractureConfig { Pattern = FracturePattern.Voronoi };
+
+// Radial (from impact point outward)
+var radial = new FractureConfig { Pattern = FracturePattern.Radial };
+
+// Shatter (many small pieces, glass-like)
+var shatter = new FractureConfig { Pattern = FracturePattern.Shatter };
+
+// Splinter (elongated pieces, wood-like)
+var splinter = new FractureConfig { Pattern = FracturePattern.Splinter };
+
+// Brick (regular rectangular pieces)
+var brick = new FractureConfig { Pattern = FracturePattern.Brick };
+
+// Uniform (grid-based)
+var uniform = new FractureConfig { Pattern = FracturePattern.Uniform };
+```
+
+### Material Presets
+
+```csharp
+var glassConfig = Physics.GlassFracture();   // Many small pieces, low threshold
+var woodConfig = Physics.WoodFracture();     // Splinters, cascade fracture
+var stoneConfig = Physics.StoneFracture();   // Voronoi chunks
+var brickConfig = Physics.BrickFracture();   // Regular pieces
+var metalConfig = Physics.MetalFracture();   // Few large pieces, high threshold
+var iceConfig = Physics.IceFracture();       // Shatter pattern, very fragile
+```
+
+### Custom Fracture Configuration
+
+```csharp
+var customConfig = new FractureConfig
+{
+    Pattern = FracturePattern.Voronoi,
+    FractureThreshold = 150.0,         // Minimum impulse to break
+    MinPieces = 5,                     // Minimum fragments
+    MaxPieces = 20,                    // Maximum fragments
+    MinFragmentSize = 0.1,             // Smallest piece (fraction of original)
+    GenerateDebris = true,             // Create small debris particles
+    DebrisCount = 50,                  // Number of debris particles
+    InheritVelocity = true,            // Fragments keep original velocity
+    FragmentVelocityScale = 1.5,       // Extra velocity from explosion
+    AllowCascadeFracture = true,       // Fragments can further break
+    MaxCascadeDepth = 2                // How many times fragments can break
+};
+```
+
+### Manual Fracture
+
+```csharp
+// Trigger fracture manually (e.g., shooting)
+var result = fracture.Fracture(
+    body: target,
+    impactPoint: hitPoint,
+    impactDirection: bulletDirection,
+    force: 500.0
+);
+
+// Process result
+foreach (var fragment in result.Fragments)
+{
+    world.AddBody(fragment);
+}
+```
+
+---
+
+## Erodible Bodies (Sand, Snow, Dirt)
+
+Create objects made of particles that can erode over time.
+
+### Create Erodible Objects
+
+```csharp
+// Sand sculpture (box shape)
+var sandCastle = Physics.CreateErodibleBox(
+    center: new Vector3D(0, 2, 0),
+    halfExtents: new Vector3D(2, 2, 2),
+    particleSize: 0.1,
+    cohesion: 0.5  // 0 = loose sand, 1 = solid
+);
+
+// Snowball (sphere shape)
+var snowball = Physics.CreateErodibleSphere(
+    center: new Vector3D(5, 1, 0),
+    radius: 1.0,
+    particleSize: 0.08,
+    cohesion: 0.6
+);
+```
+
+### Wind Erosion (Sand Blown by Wind)
+
+```csharp
+// Create wind modifier
+var wind = Physics.CreateStrongWind(new Vector3D(1, 0, 0));
+
+// Connect erodible bodies to wind
+wind.ErodibleBodies.Add(sandCastle);
+
+// Handle eroded particles
+wind.OnParticlesEroded += erodedParticles =>
+{
+    // Add to particle system for rendering
+    foreach (var p in erodedParticles)
+    {
+        particleSystem.Particles.Add(p);
+    }
+};
+
+// Update wind each frame
+wind.Update(deltaTime);
+```
+
+### Impact Erosion (Shooting Sand)
+
+```csharp
+// Projectile hits sand sculpture
+var eroded = sandCastle.ApplyImpact(
+    impactPoint: hitPosition,
+    impactForce: 100.0,
+    impactRadius: 0.5
+);
+
+// Eroded particles fly away
+foreach (var p in eroded)
+{
+    particleSystem.Add(p);
+}
+```
+
+---
+
+## Physics Modifiers
+
+Higher-level systems that combine forces, particles, and bodies.
+
+### Wind Modifier
+
+```csharp
+// Create wind with gusts and turbulence
+var wind = Physics.CreateWind(new Vector3D(1, 0, 0), strength: 10.0);
+
+// Or use presets
+var breeze = Physics.CreateBreeze(Vector3D.Right);
+var strong = Physics.CreateStrongWind(Vector3D.Right);
+var hurricane = Physics.CreateHurricane(Vector3D.Right);
+
+// Configure
+wind.GustStrength = 2.0;      // Gust multiplier
+wind.GustFrequency = 0.5;     // Gusts per second
+wind.Turbulence = 0.3;        // Random variation 0-1
+wind.Bounds = optionalBounds; // Limit to area
+
+// Apply to bodies and particles
+wind.Update(deltaTime);
+wind.Apply(body, deltaTime);
+wind.Apply(particle, deltaTime);
+```
+
+### Gravity Zones
+
+```csharp
+// Zero gravity zone
+var zeroG = Physics.CreateZeroGravityZone(bounds);
+
+// Custom gravity zone
+var moonGravity = Physics.CreateGravityZone(
+    bounds: moonArea,
+    gravity: new Vector3D(0, -1.62, 0)
+);
+
+// Apply
+moonGravity.Apply(astronaut, deltaTime);
+```
+
+### Attractors & Repellers
+
+```csharp
+// Black hole attractor
+var blackHole = Physics.CreateAttractor(
+    position: new Vector3D(0, 0, 0),
+    strength: 500.0,
+    range: 30.0
+);
+
+// Repeller (force field)
+var shield = Physics.CreateRepeller(
+    position: playerPosition,
+    strength: 200.0,
+    range: 5.0
+);
+
+// Apply to objects
+blackHole.Apply(asteroid, deltaTime);
+shield.Apply(enemy, deltaTime);
+```
+
+### Vortex Effects
+
+```csharp
+// Tornado
+var tornado = Physics.CreateTornado(new Vector3D(0, 0, 0));
+
+// Whirlpool (water)
+var whirlpool = Physics.CreateWhirlpool(new Vector3D(0, -5, 0));
+
+// Custom vortex
+var custom = new VortexModifier
+{
+    Position = center,
+    Axis = Vector3D.Up,
+    RotationalStrength = 30.0,
+    InwardStrength = 10.0,
+    LiftStrength = 20.0,
+    OuterRadius = 15.0,
+    InnerRadius = 2.0
+};
+```
+
+### Turbulence
+
+```csharp
+var turbulence = Physics.CreateTurbulence(
+    bounds: stormArea,
+    strength: 8.0
+);
+
+turbulence.Frequency = 2.0;  // Oscillation speed
+turbulence.Scale = 1.0;      // Spatial scale
+```
+
+### Drag Zones (Water, Mud)
+
+```csharp
+// Water resistance
+var waterZone = Physics.CreateWaterZone(poolBounds);
+
+// Mud/quicksand
+var mudZone = Physics.CreateMudZone(swampBounds);
+```
+
+### Modifier System
+
+Manage multiple modifiers together:
+
+```csharp
+var modifiers = Physics.CreateModifierSystem();
+
+// Add modifiers
+modifiers.Add(wind);
+modifiers.Add(tornado);
+modifiers.Add(zeroGravity);
+
+// Update all modifiers
+modifiers.Update(deltaTime);
+
+// Apply to all bodies
+modifiers.ApplyTo(world.Bodies, deltaTime);
+
+// Apply to particle system
+modifiers.ApplyTo(particleSystem, deltaTime);
+```
+
+---
+
+## Example: Sand Sculpture Blown by Wind
+
+```csharp
+// Create sand sculpture
+var sandSculpture = Physics.CreateErodibleBox(
+    center: new Vector3D(0, 1, 0),
+    halfExtents: new Vector3D(1, 1, 1),
+    particleSize: 0.05,
+    cohesion: 0.4  // Somewhat loose
+);
+
+// Create particle system for falling sand
+var fallenSand = Physics.CreateParticleSystem(50000);
+fallenSand.Gravity = new Vector3D(0, -9.81, 0);
+
+// Create wind
+var wind = Physics.CreateStrongWind(new Vector3D(1, 0, 0));
+wind.ErodibleBodies.Add(sandSculpture);
+
+// Handle eroded particles
+wind.OnParticlesEroded += particles =>
+{
+    foreach (var p in particles)
+    {
+        fallenSand.Spawn(p.Position, p.Velocity, p.Mass, 0.05, p.Lifetime, 0xFFE0C080);
+    }
+};
+
+// Game loop
+while (running)
+{
+    wind.Update(deltaTime);
+    fallenSand.Update(deltaTime);
+
+    // Render sand sculpture particles
+    foreach (var p in sandSculpture.Particles)
+    {
+        DrawParticle(p.Position, p.Color);
+    }
+
+    // Render fallen sand
+    foreach (var p in fallenSand.Particles)
+    {
+        if (p.IsAlive)
+            DrawParticle(p.Position, 0xFFE0C080);
+    }
+}
+```
+
+---
+
+## Example: Shooting Objects to Break Them
+
+```csharp
+// Setup fracture system
+var fracture = Physics.CreateFractureSystem();
+
+// Create targets
+var targets = new List<RigidBody>();
+for (int i = 0; i < 10; i++)
+{
+    var target = Physics.CreateBox(
+        new Vector3D(i * 3, 2, 10),
+        new Vector3D(0.5, 0.5, 0.5),
+        5.0,
+        MaterialPresets.Wood()
+    );
+    world.AddBody(target);
+    fracture.MakeFracturable(target, Physics.WoodFracture());
+    targets.Add(target);
+}
+
+// Handle fracture
+fracture.OnFracture += result =>
+{
+    world.RemoveBody(result.OriginalBody);
+    targets.Remove(result.OriginalBody as RigidBody);
+
+    foreach (var fragment in result.Fragments)
+    {
+        world.AddBody(fragment);
+    }
+
+    // Spawn debris particles
+    foreach (var debris in result.Debris)
+    {
+        particleSystem.Add(debris);
+    }
+};
+
+// Shooting (e.g., on mouse click)
+void Shoot(Vector3D origin, Vector3D direction)
+{
+    var hit = world.Raycast(origin, direction, 100);
+    if (hit.HasValue && hit.Value.Body is RigidBody rb)
+    {
+        // Apply impact force
+        double impactForce = 300.0;
+        rb.ApplyImpulseAtPoint(direction * impactForce, hit.Value.Point);
+
+        // Check for fracture
+        fracture.Fracture(rb, hit.Value.Point, direction, impactForce);
+    }
+}
+```
+
+---
+
 ## Performance Tips
 
 1. **Use spatial partitioning**: For >100 bodies, the engine uses spatial hashing automatically
@@ -999,32 +1598,65 @@ foreach (var frame in PrecomputedSimulation.ReadStreamingData("long_simulation.s
 
 | Method | Description |
 |--------|-------------|
+| **Core** | |
 | `CreateWorld()` | Create physics world with Earth gravity |
+| `CreateOptimizedWorld(cellSize)` | Create optimized world with spatial hashing |
 | `CreateSphere(pos, radius, mass)` | Create dynamic sphere |
 | `CreateBox(pos, halfExtents, mass)` | Create dynamic box |
 | `CreateStaticBox(pos, halfExtents)` | Create static box |
+| **Forces** | |
 | `CreateGravity(magnitude)` | Create gravity force |
 | `CreateWind(dir, strength, turbulence)` | Create wind force |
 | `CreateMagnet(pos, strength, attracting)` | Create magnetic force |
 | `CreateBuoyancy(surface, density)` | Create buoyancy force |
 | `CreateVortex(center, rotation, pull)` | Create vortex force |
 | `CreateExplosion(center, force, radius)` | Create explosion force |
+| **Particles & Fluids** | |
 | `CreateParticleSystem(max)` | Create particle system |
 | `CreateFluidSimulation(bounds)` | Create SPH fluid |
-| `CreateTrigger(pos, halfExtents)` | Create trigger zone |
 | `CreateSmoke(pos)` | Create smoke simulation |
-| `CreateCampfireSmoke(pos)` | Create campfire smoke preset |
-| `CreateSteam(pos)` | Create steam/vapor effect |
 | `CreateFire(pos)` | Create fire simulation |
 | `CreateCampfire(pos)` | Create campfire preset |
-| `CreateTorch(pos)` | Create torch flame preset |
-| `CreateBonfire(pos)` | Create large bonfire preset |
-| `CreateExplosionFire(pos, radius)` | Create explosion fireball |
 | `CreateCombustionSystem()` | Create fire/water interaction system |
+| **Real-Time Optimizations** | |
+| `CreateSpatialHash(cellSize)` | Create spatial hash for collision detection |
+| `CreateMultiLevelSpatialHash()` | Multi-level spatial hash for varied sizes |
+| `CreateIslandSolver(maxBodies)` | Create island solver for parallel solving |
+| **GPU Compute** | |
+| `CreateGpuCompute()` | Create GPU accelerator (auto-detect backend) |
+| `CreateGpuCompute(backend)` | Create GPU with specific backend |
+| **Destruction** | |
+| `CreateFractureSystem()` | Create fracture system for shattering |
+| `GlassFracture()` | Glass fracture configuration |
+| `WoodFracture()` | Wood fracture configuration |
+| `StoneFracture()` | Stone/concrete fracture configuration |
+| `MetalFracture()` | Metal fracture configuration |
+| `IceFracture()` | Ice fracture configuration |
+| `CreateErodibleBox()` | Create erodible sand/snow box |
+| `CreateErodibleSphere()` | Create erodible sphere |
+| **Modifiers** | |
+| `CreateModifierSystem()` | Create modifier manager |
+| `CreateWind(dir, strength)` | Create wind modifier |
+| `CreateBreeze(dir)` | Create gentle breeze |
+| `CreateStrongWind(dir)` | Create strong wind |
+| `CreateHurricane(dir)` | Create hurricane-force wind |
+| `CreateGravityZone(bounds, gravity)` | Create gravity zone |
+| `CreateZeroGravityZone(bounds)` | Create zero-G zone |
+| `CreateAttractor(pos, strength, range)` | Create attractor point |
+| `CreateRepeller(pos, strength, range)` | Create repeller point |
+| `CreateTornado(pos)` | Create tornado vortex |
+| `CreateWhirlpool(pos)` | Create whirlpool vortex |
+| `CreateTurbulence(bounds, strength)` | Create turbulence zone |
+| `CreateWaterZone(bounds)` | Create water drag zone |
+| `CreateMudZone(bounds)` | Create mud/quicksand zone |
+| **Scientific Computing** | |
 | `CreatePrecomputed(world)` | Create precomputed simulation |
 | `CreateRecorder()` | Create simulation recorder |
 | `CreateParallelProcessor()` | Create parallel physics processor |
 | `CreateParticleSoA(capacity)` | Create SoA particle container |
+| **Object Pools** | |
+| `CreatePool<T>()` | Create generic object pool |
+| `CreateListPool<T>()` | Create list pool |
 
 ---
 

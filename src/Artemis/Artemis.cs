@@ -10,6 +10,9 @@ global using Artemis.Materials;
 global using Artemis.Particles;
 global using Artemis.Collision;
 global using Artemis.Simulation;
+global using Artemis.Compute;
+global using Artemis.Destruction;
+global using Artemis.Modifiers;
 
 namespace Artemis
 {
@@ -499,6 +502,302 @@ namespace Artemis
         public static ParticleSoA CreateParticleSoA(int capacity)
         {
             return new ParticleSoA(capacity);
+        }
+
+        #endregion
+
+        #region Real-Time Optimized Physics
+
+        /// <summary>
+        /// Creates an optimized physics world for real-time applications.
+        /// Features: spatial hashing, island solver, warm starting, multi-threading.
+        /// </summary>
+        /// <param name="spatialCellSize">Cell size for spatial hash (>= largest object diameter).</param>
+        public static OptimizedPhysicsWorld CreateOptimizedWorld(double spatialCellSize = 2.0)
+        {
+            return new OptimizedPhysicsWorld(spatialCellSize);
+        }
+
+        /// <summary>
+        /// Creates an optimized physics world with custom gravity.
+        /// </summary>
+        public static OptimizedPhysicsWorld CreateOptimizedWorld(Vector3D gravity, double spatialCellSize = 2.0)
+        {
+            return new OptimizedPhysicsWorld(gravity, spatialCellSize);
+        }
+
+        /// <summary>
+        /// Creates a spatial hash for efficient broad-phase collision detection.
+        /// </summary>
+        public static SpatialHash CreateSpatialHash(double cellSize = 2.0)
+        {
+            return new SpatialHash(cellSize);
+        }
+
+        /// <summary>
+        /// Creates a multi-level spatial hash for scenes with varying object sizes.
+        /// </summary>
+        public static MultiLevelSpatialHash CreateMultiLevelSpatialHash(
+            double minSize = 0.5, double maxSize = 16.0, int levels = 4)
+        {
+            return new MultiLevelSpatialHash(minSize, maxSize, levels);
+        }
+
+        /// <summary>
+        /// Creates an island solver for parallel constraint solving.
+        /// </summary>
+        public static IslandSolver CreateIslandSolver(int maxBodies = 10000)
+        {
+            return new IslandSolver(maxBodies);
+        }
+
+        #endregion
+
+        #region GPU Compute
+
+        /// <summary>
+        /// Creates a GPU compute accelerator with automatic backend detection.
+        /// Supports OpenCL (Intel/AMD/NVIDIA), CUDA (NVIDIA), and CPU fallback.
+        /// </summary>
+        public static GpuCompute CreateGpuCompute()
+        {
+            var compute = new GpuCompute();
+            compute.Initialize();
+            return compute;
+        }
+
+        /// <summary>
+        /// Creates a GPU compute accelerator with a preferred backend.
+        /// </summary>
+        public static GpuCompute CreateGpuCompute(GpuBackend preferredBackend)
+        {
+            var compute = new GpuCompute(preferredBackend);
+            compute.Initialize();
+            return compute;
+        }
+
+        #endregion
+
+        #region Fracture and Destruction
+
+        /// <summary>
+        /// Creates a fracture system for realistic object destruction.
+        /// </summary>
+        public static FractureSystem CreateFractureSystem()
+        {
+            return new FractureSystem();
+        }
+
+        /// <summary>
+        /// Creates a fracture system with a specific random seed for reproducible results.
+        /// </summary>
+        public static FractureSystem CreateFractureSystem(int seed)
+        {
+            return new FractureSystem(seed);
+        }
+
+        /// <summary>
+        /// Creates a glass fracture configuration.
+        /// </summary>
+        public static FractureConfig GlassFracture() => FractureSystem.Glass();
+
+        /// <summary>
+        /// Creates a wood fracture configuration.
+        /// </summary>
+        public static FractureConfig WoodFracture() => FractureSystem.Wood();
+
+        /// <summary>
+        /// Creates a stone/concrete fracture configuration.
+        /// </summary>
+        public static FractureConfig StoneFracture() => FractureSystem.Stone();
+
+        /// <summary>
+        /// Creates a brick fracture configuration.
+        /// </summary>
+        public static FractureConfig BrickFracture() => FractureSystem.Brick();
+
+        /// <summary>
+        /// Creates a metal fracture configuration.
+        /// </summary>
+        public static FractureConfig MetalFracture() => FractureSystem.Metal();
+
+        /// <summary>
+        /// Creates an ice fracture configuration.
+        /// </summary>
+        public static FractureConfig IceFracture() => FractureSystem.Ice();
+
+        /// <summary>
+        /// Creates an erodible body (sand, snow, dirt) filling a box shape.
+        /// </summary>
+        public static ErodibleBody CreateErodibleBox(
+            Vector3D center, Vector3D halfExtents, double particleSize = 0.1, double cohesion = 0.5)
+        {
+            return ErodibleBody.CreateBox(center, halfExtents, particleSize, cohesion);
+        }
+
+        /// <summary>
+        /// Creates an erodible sphere (sand ball, snowball).
+        /// </summary>
+        public static ErodibleBody CreateErodibleSphere(
+            Vector3D center, double radius, double particleSize = 0.1, double cohesion = 0.5)
+        {
+            return ErodibleBody.CreateSphere(center, radius, particleSize, cohesion);
+        }
+
+        #endregion
+
+        #region Modifiers
+
+        /// <summary>
+        /// Creates a modifier system for managing multiple physics modifiers.
+        /// </summary>
+        public static ModifierSystem CreateModifierSystem()
+        {
+            return new ModifierSystem();
+        }
+
+        /// <summary>
+        /// Creates a wind modifier.
+        /// </summary>
+        public static WindModifier CreateWind(Vector3D direction, double strength = 5.0)
+        {
+            return new WindModifier(direction, strength);
+        }
+
+        /// <summary>
+        /// Creates a gentle breeze.
+        /// </summary>
+        public static WindModifier CreateBreeze(Vector3D direction)
+        {
+            var wind = WindModifier.Breeze();
+            wind.BaseDirection = direction.Normalized();
+            return wind;
+        }
+
+        /// <summary>
+        /// Creates strong wind.
+        /// </summary>
+        public static WindModifier CreateStrongWind(Vector3D direction)
+        {
+            var wind = WindModifier.Strong();
+            wind.BaseDirection = direction.Normalized();
+            return wind;
+        }
+
+        /// <summary>
+        /// Creates hurricane-force wind.
+        /// </summary>
+        public static WindModifier CreateHurricane(Vector3D direction)
+        {
+            var wind = WindModifier.Hurricane();
+            wind.BaseDirection = direction.Normalized();
+            return wind;
+        }
+
+        /// <summary>
+        /// Creates a gravity modifier zone.
+        /// </summary>
+        public static GravityModifier CreateGravityZone(AABB bounds, Vector3D gravity)
+        {
+            return new GravityModifier { Bounds = bounds, Gravity = gravity };
+        }
+
+        /// <summary>
+        /// Creates a zero-gravity zone.
+        /// </summary>
+        public static GravityModifier CreateZeroGravityZone(AABB bounds)
+        {
+            return GravityModifier.ZeroG(bounds);
+        }
+
+        /// <summary>
+        /// Creates an attractor point.
+        /// </summary>
+        public static AttractorModifier CreateAttractor(Vector3D position, double strength = 100.0, double range = 20.0)
+        {
+            return new AttractorModifier
+            {
+                Position = position,
+                Strength = strength,
+                Range = range
+            };
+        }
+
+        /// <summary>
+        /// Creates a repeller point.
+        /// </summary>
+        public static AttractorModifier CreateRepeller(Vector3D position, double strength = 100.0, double range = 20.0)
+        {
+            return new AttractorModifier
+            {
+                Position = position,
+                Strength = strength,
+                Range = range,
+                Repel = true
+            };
+        }
+
+        /// <summary>
+        /// Creates a tornado vortex.
+        /// </summary>
+        public static VortexModifier CreateTornado(Vector3D position)
+        {
+            return VortexModifier.Tornado(position);
+        }
+
+        /// <summary>
+        /// Creates a whirlpool vortex.
+        /// </summary>
+        public static VortexModifier CreateWhirlpool(Vector3D position)
+        {
+            return VortexModifier.Whirlpool(position);
+        }
+
+        /// <summary>
+        /// Creates a turbulence zone.
+        /// </summary>
+        public static TurbulenceModifier CreateTurbulence(AABB? bounds = null, double strength = 5.0)
+        {
+            return new TurbulenceModifier { Bounds = bounds, Strength = strength };
+        }
+
+        /// <summary>
+        /// Creates a water drag zone.
+        /// </summary>
+        public static DragModifier CreateWaterZone(AABB bounds)
+        {
+            return DragModifier.Water(bounds);
+        }
+
+        /// <summary>
+        /// Creates a mud/quicksand zone.
+        /// </summary>
+        public static DragModifier CreateMudZone(AABB bounds)
+        {
+            return DragModifier.Mud(bounds);
+        }
+
+        #endregion
+
+        #region Object Pools
+
+        /// <summary>
+        /// Creates a generic object pool.
+        /// </summary>
+        public static ObjectPool<T> CreatePool<T>(
+            Func<T>? factory = null,
+            Action<T>? reset = null,
+            int initialSize = 0) where T : class, new()
+        {
+            return new ObjectPool<T>(factory, reset, initialSize);
+        }
+
+        /// <summary>
+        /// Creates a list pool.
+        /// </summary>
+        public static ListPool<T> CreateListPool<T>(int initialCapacity = 16)
+        {
+            return new ListPool<T>(initialCapacity);
         }
 
         #endregion
