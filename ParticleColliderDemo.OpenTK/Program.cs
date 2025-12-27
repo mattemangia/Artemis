@@ -43,7 +43,7 @@ public class ParticleColliderWindow : GraphicsWindow
     private float _viewRotation = 0f; // Rotation around Y axis for view
 
     // Mouse control
-    private Vector2 _lastMousePos;
+    private OpenTK.Mathematics.Vector2 _lastMousePos;
     private bool _isRotating = false;
     private bool _isPanning = false;
 
