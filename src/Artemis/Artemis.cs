@@ -1334,5 +1334,160 @@ namespace Artemis
         }
 
         #endregion
+
+        #region Ballistics
+
+        /// <summary>
+        /// Creates a ballistics system for trajectory calculations.
+        /// </summary>
+        public static BallisticsSystem CreateBallisticsSystem()
+        {
+            return new BallisticsSystem();
+        }
+
+        /// <summary>
+        /// Creates a real-time bullet simulator.
+        /// </summary>
+        public static BulletSimulator CreateBulletSimulator()
+        {
+            return new BulletSimulator();
+        }
+
+        /// <summary>
+        /// Creates a 9mm pistol projectile.
+        /// </summary>
+        public static Projectile Bullet9mm() => Projectile.Bullet9mm();
+
+        /// <summary>
+        /// Creates a 5.56mm NATO rifle projectile.
+        /// </summary>
+        public static Projectile Bullet556() => Projectile.Bullet556();
+
+        /// <summary>
+        /// Creates a 7.62mm NATO rifle projectile.
+        /// </summary>
+        public static Projectile Bullet762() => Projectile.Bullet762();
+
+        /// <summary>
+        /// Creates a .50 BMG heavy projectile.
+        /// </summary>
+        public static Projectile Bullet50BMG() => Projectile.Bullet50BMG();
+
+        /// <summary>
+        /// Creates a 12 gauge shotgun slug.
+        /// </summary>
+        public static Projectile ShotgunSlug() => Projectile.ShotgunSlug();
+
+        /// <summary>
+        /// Creates an arrow projectile.
+        /// </summary>
+        public static Projectile Arrow() => Projectile.Arrow();
+
+        /// <summary>
+        /// Creates a crossbow bolt projectile.
+        /// </summary>
+        public static Projectile CrossbowBolt() => Projectile.CrossbowBolt();
+
+        /// <summary>
+        /// Creates a tank shell projectile (APFSDS).
+        /// </summary>
+        public static Projectile TankShell() => Projectile.TankShell();
+
+        /// <summary>
+        /// Creates an artillery shell projectile (155mm HE).
+        /// </summary>
+        public static Projectile ArtilleryShell() => Projectile.ArtilleryShell();
+
+        /// <summary>
+        /// Creates a baseball projectile.
+        /// </summary>
+        public static Projectile Baseball() => Projectile.Baseball();
+
+        /// <summary>
+        /// Creates a golf ball projectile.
+        /// </summary>
+        public static Projectile GolfBall() => Projectile.GolfBall();
+
+        /// <summary>
+        /// Creates a custom projectile.
+        /// </summary>
+        public static Projectile CreateProjectile(
+            string name, float mass, float diameter,
+            float dragCoefficient, float muzzleVelocity)
+        {
+            return new Projectile
+            {
+                Name = name,
+                Mass = mass,
+                Diameter = diameter,
+                DragCoefficient = dragCoefficient,
+                MuzzleVelocity = muzzleVelocity
+            };
+        }
+
+        /// <summary>
+        /// Creates standard sea level ballistic environment.
+        /// </summary>
+        public static BallisticEnvironment StandardEnvironment()
+            => BallisticEnvironment.Standard();
+
+        /// <summary>
+        /// Creates high altitude ballistic environment (3000m).
+        /// </summary>
+        public static BallisticEnvironment HighAltitudeEnvironment()
+            => BallisticEnvironment.HighAltitude();
+
+        /// <summary>
+        /// Creates desert ballistic environment (hot, dry).
+        /// </summary>
+        public static BallisticEnvironment DesertEnvironment()
+            => BallisticEnvironment.Desert();
+
+        /// <summary>
+        /// Creates arctic ballistic environment (cold).
+        /// </summary>
+        public static BallisticEnvironment ArcticEnvironment()
+            => BallisticEnvironment.Arctic();
+
+        /// <summary>
+        /// Calculates trajectory for a projectile.
+        /// </summary>
+        public static TrajectoryResult CalculateTrajectory(
+            Projectile projectile,
+            System.Numerics.Vector3 origin,
+            System.Numerics.Vector3 direction,
+            BallisticEnvironment? environment = null)
+        {
+            var ballistics = new BallisticsSystem();
+            return ballistics.CalculateTrajectory(projectile, origin, direction, environment);
+        }
+
+        /// <summary>
+        /// Calculates firing solution to hit a target.
+        /// </summary>
+        public static (float elevation, float windage)? CalculateFiringSolution(
+            Projectile projectile,
+            System.Numerics.Vector3 origin,
+            System.Numerics.Vector3 target,
+            BallisticEnvironment? environment = null)
+        {
+            var ballistics = new BallisticsSystem();
+            return ballistics.CalculateFiringSolution(projectile, origin, target, environment);
+        }
+
+        /// <summary>
+        /// Creates a range table for a projectile.
+        /// </summary>
+        public static Dictionary<float, (float drop, float time, float energy, float velocity)> CreateRangeTable(
+            Projectile projectile,
+            float maxDistance,
+            float interval = 100f,
+            BallisticEnvironment? environment = null)
+        {
+            var ballistics = new BallisticsSystem();
+            return ballistics.CreateRangeTable(projectile, maxDistance, interval, environment);
+        }
+
+        #endregion
     }
 }

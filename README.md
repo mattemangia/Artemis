@@ -29,6 +29,7 @@
 - **State Transfer**: Bidirectional state capture, time reversal, undo/redo
 - **Force Interaction**: Forces combine, amplify, dampen, or cancel each other
 - **Ray Tracing**: GPU-accelerated mirror reflections, glass refraction, PBR materials
+- **Ballistics**: Bullet kinematics, trajectory with drag/wind, firing solutions, range tables
 - **High Performance**: SIMD, multithreading, parallel processing, SoA data layouts
 - **Fluent API**: Intuitive, chainable configuration
 - **Extensible**: Easy to add custom forces, bodies, and behaviors
@@ -2269,6 +2270,235 @@ rt.UseGPU = true;                                     // GPU acceleration
 
 ---
 
+## Ballistics
+
+Realistic bullet kinematics, trajectory calculations with drag, wind, and environmental effects.
+
+### Basic Trajectory
+
+```csharp
+// Create ballistics system
+var ballistics = Physics.CreateBallisticsSystem();
+
+// Get a projectile preset
+var bullet = Physics.Bullet556();  // 5.56mm NATO
+
+// Calculate trajectory
+var result = ballistics.CalculateTrajectory(
+    projectile: bullet,
+    origin: Vector3.Zero,
+    direction: new Vector3(0, 0.1f, 1),  // Slight elevation
+    environment: Physics.StandardEnvironment()
+);
+
+// Access results
+Console.WriteLine($"Time of flight: {result.TotalTime:F2}s");
+Console.WriteLine($"Distance: {result.TotalDistance:F0}m");
+Console.WriteLine($"Max height: {result.MaxHeight:F1}m");
+Console.WriteLine($"Final energy: {result.FinalEnergy:F0}J");
+Console.WriteLine($"Impact angle: {result.ImpactAngle:F1}°");
+Console.WriteLine($"Wind drift: {result.WindDrift:F2}m");
+Console.WriteLine($"Drop: {result.Drop:F2}m");
+
+// Get position at specific time
+Vector3 posAt1Sec = result.GetPositionAtTime(1.0f);
+
+// Get time to reach distance
+float timeToTarget = result.GetTimeToDistance(500f);
+```
+
+### Projectile Presets
+
+```csharp
+// Firearms
+var pistol = Physics.Bullet9mm();       // 9mm Parabellum (360 m/s)
+var rifle = Physics.Bullet556();        // 5.56 NATO (940 m/s)
+var sniper = Physics.Bullet762();       // 7.62 NATO (850 m/s)
+var heavy = Physics.Bullet50BMG();      // .50 BMG (928 m/s)
+var shotgun = Physics.ShotgunSlug();    // 12ga slug (450 m/s)
+
+// Archery
+var arrow = Physics.Arrow();            // Compound bow (100 m/s)
+var bolt = Physics.CrossbowBolt();      // Crossbow (130 m/s)
+
+// Military
+var tank = Physics.TankShell();         // 120mm APFSDS (1750 m/s)
+var artillery = Physics.ArtilleryShell(); // 155mm HE (827 m/s)
+
+// Sports
+var baseball = Physics.Baseball();      // Pitched ball (45 m/s)
+var golf = Physics.GolfBall();          // Driver hit (70 m/s)
+
+// Custom projectile
+var custom = Physics.CreateProjectile(
+    name: "Custom Bullet",
+    mass: 0.012f,           // 12g
+    diameter: 0.01f,        // 10mm
+    dragCoefficient: 0.4f,
+    muzzleVelocity: 500f    // 500 m/s
+);
+```
+
+### Environment Conditions
+
+```csharp
+// Preset environments
+var sea = Physics.StandardEnvironment();     // Standard sea level
+var mountain = Physics.HighAltitudeEnvironment(); // 3000m altitude
+var desert = Physics.DesertEnvironment();    // Hot, dry
+var arctic = Physics.ArcticEnvironment();    // Cold
+
+// Custom environment
+var custom = new BallisticEnvironment
+{
+    AirDensity = 1.1f,          // kg/m³
+    Temperature = 25f,          // Celsius
+    Pressure = 1000f,           // hPa
+    Humidity = 0.6f,            // 0-1
+    Altitude = 500f,            // meters
+    Wind = new Vector3(5, 0, 2), // m/s (right, up, forward)
+    Gravity = new Vector3(0, -9.81f, 0)
+};
+
+// Recalculate air density from conditions
+custom.RecalculateAirDensity();
+
+// Check speed of sound
+Console.WriteLine($"Speed of sound: {custom.SpeedOfSound:F0} m/s");
+```
+
+### Firing Solutions
+
+```csharp
+// Calculate angle to hit a target
+var solution = Physics.CalculateFiringSolution(
+    projectile: Physics.Bullet762(),
+    origin: new Vector3(0, 1.5f, 0),      // Shooter position
+    target: new Vector3(0, 1.5f, 500f),   // Target 500m away
+    environment: Physics.StandardEnvironment()
+);
+
+if (solution.HasValue)
+{
+    Console.WriteLine($"Elevation: {solution.Value.elevation:F2}°");
+    Console.WriteLine($"Windage: {solution.Value.windage:F2}°");
+}
+```
+
+### Range Tables
+
+```csharp
+// Generate range table for a projectile
+var table = Physics.CreateRangeTable(
+    projectile: Physics.Bullet762(),
+    maxDistance: 1000f,
+    interval: 100f,      // Every 100m
+    environment: Physics.StandardEnvironment()
+);
+
+Console.WriteLine("Distance | Drop    | Time   | Energy  | Velocity");
+foreach (var (distance, data) in table)
+{
+    Console.WriteLine($"{distance,8:F0}m | {data.drop,6:F2}m | {data.time,5:F3}s | {data.energy,6:F0}J | {data.velocity,5:F0}m/s");
+}
+```
+
+### Real-Time Bullet Simulation
+
+```csharp
+// Create bullet simulator for games
+var simulator = Physics.CreateBulletSimulator();
+simulator.Environment = Physics.StandardEnvironment();
+
+// Set collision callback
+simulator.CollisionCheck = (origin, direction, maxDist) =>
+{
+    // Your raycast implementation
+    var hit = world.Raycast(origin, direction, maxDist);
+    if (hit.HasValue)
+        return (true, hit.Value.Point, hit.Value.Normal);
+    return (false, Vector3.Zero, Vector3.Zero);
+};
+
+// Handle bullet impacts
+simulator.OnBulletHit += (bullet, point, normal) =>
+{
+    Console.WriteLine($"Hit at {point} with {bullet.KineticEnergy:F0}J");
+
+    // Calculate penetration
+    float penetration = TerminalBallistics.CalculatePenetration(
+        bullet.Projectile, bullet.Speed, targetHardness: 150
+    );
+    Console.WriteLine($"Penetration: {penetration * 100:F1}cm");
+};
+
+// Spawn bullet
+var bullet = simulator.SpawnBullet(
+    Physics.Bullet556(),
+    position: gunPosition,
+    direction: aimDirection
+);
+
+// Update each frame
+simulator.Update(deltaTime);
+
+// Access active bullets for rendering
+foreach (var b in simulator.ActiveBullets)
+{
+    DrawBulletTracer(b.Position, b.Velocity);
+}
+```
+
+### Terminal Ballistics
+
+```csharp
+// Calculate penetration depth
+float penetration = TerminalBallistics.CalculatePenetration(
+    bullet: Physics.Bullet762(),
+    impactVelocity: 700f,    // m/s
+    targetHardness: 150f,    // BHN (mild steel ~150, hardened ~500)
+    targetDensity: 7800f     // kg/m³ (steel)
+);
+
+// Calculate bullet expansion (hollow point)
+float expansion = TerminalBallistics.CalculateExpansion(
+    impactVelocity: 400f,
+    isHollowPoint: true
+);
+
+// Estimate ricochet angle
+float ricochetAngle = TerminalBallistics.CalculateRicochetAngle(
+    targetHardness: 400f,    // Hard surface
+    bulletHardness: 150f
+);
+Console.WriteLine($"Ricochet threshold: {ricochetAngle:F1}° from surface");
+```
+
+### Advanced Configuration
+
+```csharp
+var ballistics = Physics.CreateBallisticsSystem();
+
+// Configuration
+ballistics.TimeStep = 0.0001f;         // High precision (0.1ms)
+ballistics.MaxTime = 30f;              // Maximum 30 second flight
+ballistics.MinVelocity = 5f;           // Stop when below 5 m/s
+ballistics.GroundLevel = 0f;           // Ground plane Y level
+ballistics.SimulateSpinDecay = true;   // Gyroscopic stability decay
+ballistics.UseAdvancedDragModel = true; // Mach-dependent drag
+
+// Calculate various metrics
+float drop = ballistics.CalculateDrop(Physics.Bullet556(), distance: 300f);
+float tof = ballistics.CalculateTimeOfFlight(Physics.Bullet556(), 300f, launchAngle: 0f);
+float energy = ballistics.CalculateEnergyAtDistance(Physics.Bullet556(), 300f);
+float maxRange = ballistics.CalculateMaxRange(Physics.Bullet556());
+
+Console.WriteLine($"At 300m: drop={drop:F2}m, ToF={tof:F3}s, energy={energy:F0}J");
+Console.WriteLine($"Max range: {maxRange:F0}m");
+```
+
+---
+
 ### Modifier System
 
 Manage multiple modifiers together:
@@ -2556,6 +2786,28 @@ void Shoot(Vector3D origin, Vector3D direction)
 | `CreatePointLight()` | Create point light |
 | `CreateDirectionalLight()` | Create directional light |
 | `CreateAreaLight()` | Create area light (soft shadows) |
+| **Ballistics** | |
+| `CreateBallisticsSystem()` | Create ballistics trajectory calculator |
+| `CreateBulletSimulator()` | Create real-time bullet simulator |
+| `Bullet9mm()` | 9mm Parabellum projectile |
+| `Bullet556()` | 5.56mm NATO rifle projectile |
+| `Bullet762()` | 7.62mm NATO rifle projectile |
+| `Bullet50BMG()` | .50 BMG heavy projectile |
+| `ShotgunSlug()` | 12 gauge shotgun slug |
+| `Arrow()` | Compound bow arrow |
+| `CrossbowBolt()` | Crossbow bolt |
+| `TankShell()` | 120mm APFSDS tank shell |
+| `ArtilleryShell()` | 155mm HE artillery shell |
+| `Baseball()` | Baseball projectile |
+| `GolfBall()` | Golf ball projectile |
+| `CreateProjectile(...)` | Custom projectile |
+| `StandardEnvironment()` | Standard sea level conditions |
+| `HighAltitudeEnvironment()` | High altitude (3000m) conditions |
+| `DesertEnvironment()` | Hot desert conditions |
+| `ArcticEnvironment()` | Cold arctic conditions |
+| `CalculateTrajectory(...)` | Calculate full trajectory |
+| `CalculateFiringSolution(...)` | Calculate firing angle to hit target |
+| `CreateRangeTable(...)` | Generate range table for projectile |
 | **Object Pools** | |
 | `CreatePool<T>()` | Create generic object pool |
 | `CreateListPool<T>()` | Create list pool |
