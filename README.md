@@ -1,6 +1,30 @@
-# Artemis Physics Engine
+<p align="center">
+  <img src="logo.png" alt="Artemis Physics Engine Logo" width="200"/>
+</p>
 
-Un motore fisico 2D leggero scritto in C# con demo interattiva.
+<h1 align="center">Artemis Physics Engine</h1>
+
+<p align="center">
+  <a href="https://github.com/mattemangia/Artemis/stargazers">
+    <img src="https://img.shields.io/github/stars/mattemangia/Artemis?style=flat-square" alt="Stars"/>
+  </a>
+  <a href="https://github.com/mattemangia/Artemis/network/members">
+    <img src="https://img.shields.io/github/forks/mattemangia/Artemis?style=flat-square" alt="Forks"/>
+  </a>
+  <a href="https://github.com/mattemangia/Artemis/issues">
+    <img src="https://img.shields.io/github/issues/mattemangia/Artemis?style=flat-square" alt="Issues"/>
+  </a>
+  <a href="https://github.com/mattemangia/Artemis/commits/main">
+    <img src="https://img.shields.io/github/last-commit/mattemangia/Artemis?style=flat-square" alt="Last Commit"/>
+  </a>
+  <img src="https://img.shields.io/badge/.NET-8.0-512BD4?style=flat-square&logo=dotnet" alt=".NET 8.0"/>
+  <img src="https://img.shields.io/github/languages/top/mattemangia/Artemis?style=flat-square" alt="Top Language"/>
+  <img src="https://img.shields.io/github/repo-size/mattemangia/Artemis?style=flat-square" alt="Repo Size"/>
+</p>
+
+<p align="center">
+  Un motore fisico 2D leggero scritto in C# con demo interattiva.
+</p>
 
 ## Struttura del Progetto
 
