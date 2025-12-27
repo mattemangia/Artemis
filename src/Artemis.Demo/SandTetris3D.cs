@@ -28,9 +28,9 @@ namespace Artemis.Demo
         private const double TerrariumWidth = 10.0;
         private const double TerrariumHeight = 15.0;
         private const double TerrariumDepth = 2.5;  // THIN terrarium for playability
-        private const double MinBallRadius = 0.6;
-        private const double MaxBallRadius = 1.5;
-        private const double ParticleRadius = 0.12;
+        private const double MinBallRadius = 0.4;
+        private const double MaxBallRadius = 1.2;
+        private const double ParticleRadius = 0.06;  // Smaller particles = more grains per ball
         private const int ScorePerClear = 100;
         private const int BonusPerChain = 50;
         private const float ShineAnimationDuration = 1.5f;  // Seconds before layer disappears
