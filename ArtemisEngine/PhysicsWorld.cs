@@ -4,6 +4,23 @@ public class PhysicsWorld
 {
     public Vector2 Gravity { get; set; }
     public List<RigidBody> Bodies { get; private set; }
+    public List<Joint> Joints { get; private set; }
+
+    // Spatial partitioning for optimization
+    private SpatialHashGrid? _spatialGrid;
+    public bool UseSpatialPartitioning { get; set; } = true;
+
+    // Collision tracking for events
+    private Dictionary<(RigidBody, RigidBody), bool> _previousCollisions;
+    private HashSet<(RigidBody, RigidBody)> _currentCollisions;
+
+    // Events
+    public event CollisionEventHandler? OnCollisionEnter;
+    public event CollisionEventHandler? OnCollisionStay;
+    public event CollisionEventHandler? OnCollisionExit;
+    public event CollisionEventHandler? OnTriggerEnter;
+    public event CollisionEventHandler? OnTriggerStay;
+    public event CollisionEventHandler? OnTriggerExit;
 
     private const int VelocityIterations = 6;
     private const int PositionIterations = 2;
@@ -12,6 +29,10 @@ public class PhysicsWorld
     {
         Gravity = gravity;
         Bodies = new List<RigidBody>();
+        Joints = new List<Joint>();
+        _spatialGrid = new SpatialHashGrid(10f);
+        _previousCollisions = new Dictionary<(RigidBody, RigidBody), bool>();
+        _currentCollisions = new HashSet<(RigidBody, RigidBody)>();
     }
 
     public void AddBody(RigidBody body)
@@ -22,14 +43,55 @@ public class PhysicsWorld
     public void RemoveBody(RigidBody body)
     {
         Bodies.Remove(body);
+
+        // Clean up collision tracking
+        var keysToRemove = _previousCollisions.Keys
+            .Where(k => k.Item1 == body || k.Item2 == body)
+            .ToList();
+
+        foreach (var key in keysToRemove)
+        {
+            _previousCollisions.Remove(key);
+        }
+    }
+
+    public void AddJoint(Joint joint)
+    {
+        Joints.Add(joint);
+    }
+
+    public void RemoveJoint(Joint joint)
+    {
+        Joints.Remove(joint);
+    }
+
+    public RaycastHit Raycast(Ray ray, int layerMask = ~0)
+    {
+        return Raycaster.Raycast(ray, Bodies, layerMask);
+    }
+
+    public RaycastHit[] RaycastAll(Ray ray, int layerMask = ~0)
+    {
+        return Raycaster.RaycastAll(ray, Bodies, layerMask);
     }
 
     public void Step(float deltaTime)
     {
+        _currentCollisions.Clear();
+
+        // Update sleeping states
+        foreach (var body in Bodies)
+        {
+            if (!body.IsStatic && body.CanSleep)
+            {
+                SleepingSystem.UpdateSleepState(body, deltaTime);
+            }
+        }
+
         // Apply gravity
         foreach (var body in Bodies)
         {
-            if (!body.IsStatic && !body.IsKinematic)
+            if (!body.IsStatic && !body.IsKinematic && !body.IsSleeping)
             {
                 body.ApplyForce(Gravity * body.Mass * deltaTime);
             }
@@ -41,7 +103,31 @@ public class PhysicsWorld
             body.Update(deltaTime);
         }
 
+        // Solve joints
+        foreach (var joint in Joints)
+        {
+            if (joint.Enabled)
+            {
+                joint.Solve(deltaTime);
+            }
+        }
+
         // Collision detection and resolution
+        if (UseSpatialPartitioning && _spatialGrid != null)
+        {
+            PerformSpatialCollisionDetection(deltaTime);
+        }
+        else
+        {
+            PerformBruteForceCollisionDetection(deltaTime);
+        }
+
+        // Process collision events
+        ProcessCollisionEvents();
+    }
+
+    private void PerformBruteForceCollisionDetection(float deltaTime)
+    {
         for (int i = 0; i < Bodies.Count; i++)
         {
             for (int j = i + 1; j < Bodies.Count; j++)
@@ -49,14 +135,141 @@ public class PhysicsWorld
                 var bodyA = Bodies[i];
                 var bodyB = Bodies[j];
 
-                if (bodyA.IsStatic && bodyB.IsStatic)
+                ProcessCollisionPair(bodyA, bodyB, deltaTime);
+            }
+        }
+    }
+
+    private void PerformSpatialCollisionDetection(float deltaTime)
+    {
+        // Rebuild spatial grid
+        _spatialGrid!.Clear();
+        foreach (var body in Bodies)
+        {
+            _spatialGrid.Insert(body);
+        }
+
+        // Check collisions using spatial grid
+        var checkedPairs = new HashSet<(RigidBody, RigidBody)>();
+
+        foreach (var body in Bodies)
+        {
+            if (body.IsSleeping)
+                continue;
+
+            var nearby = _spatialGrid.QueryNearby(body);
+
+            foreach (var other in nearby)
+            {
+                var pair = body.GetHashCode() < other.GetHashCode() ? (body, other) : (other, body);
+
+                if (!checkedPairs.Add(pair))
                     continue;
 
-                if (DetectCollision(bodyA, bodyB, out var collision))
+                ProcessCollisionPair(body, other, deltaTime);
+            }
+        }
+    }
+
+    private void ProcessCollisionPair(RigidBody bodyA, RigidBody bodyB, float deltaTime)
+    {
+        // Skip if both sleeping
+        if (bodyA.IsSleeping && bodyB.IsSleeping)
+            return;
+
+        // Check if can collide
+        if (!bodyA.CanCollideWith(bodyB))
+            return;
+
+        if (DetectCollision(bodyA, bodyB, out var collision))
+        {
+            var pair = (bodyA, bodyB);
+            _currentCollisions.Add(pair);
+
+            bool isTrigger = bodyA.IsTrigger || bodyB.IsTrigger;
+
+            if (!isTrigger)
+            {
+                // Physical collision
+                ResolveCollision(bodyA, bodyB, collision);
+
+                // Wake up bodies
+                bodyA.WakeUp();
+                bodyB.WakeUp();
+
+                // Notify collision listeners
+                bodyA.CollisionListener?.OnCollisionEnter(bodyB, collision);
+                bodyB.CollisionListener?.OnCollisionEnter(bodyA, collision);
+            }
+            else
+            {
+                // Trigger collision - no physical resolution
+                bodyA.CollisionListener?.OnCollisionEnter(bodyB, collision);
+                bodyB.CollisionListener?.OnCollisionEnter(bodyA, collision);
+            }
+        }
+    }
+
+    private void ProcessCollisionEvents()
+    {
+        // Detect new collisions (Enter)
+        foreach (var pair in _currentCollisions)
+        {
+            if (!_previousCollisions.ContainsKey(pair))
+            {
+                bool isTrigger = pair.Item1.IsTrigger || pair.Item2.IsTrigger;
+
+                if (isTrigger)
                 {
-                    ResolveCollision(bodyA, bodyB, collision);
+                    OnTriggerEnter?.Invoke(this, new CollisionEventArgs(pair.Item1, pair.Item2, new Collision()));
+                }
+                else
+                {
+                    OnCollisionEnter?.Invoke(this, new CollisionEventArgs(pair.Item1, pair.Item2, new Collision()));
                 }
             }
+            else
+            {
+                // Collision ongoing (Stay)
+                bool isTrigger = pair.Item1.IsTrigger || pair.Item2.IsTrigger;
+
+                if (isTrigger)
+                {
+                    OnTriggerStay?.Invoke(this, new CollisionEventArgs(pair.Item1, pair.Item2, new Collision()));
+                }
+                else
+                {
+                    OnCollisionStay?.Invoke(this, new CollisionEventArgs(pair.Item1, pair.Item2, new Collision()));
+                }
+            }
+        }
+
+        // Detect ended collisions (Exit)
+        foreach (var pair in _previousCollisions.Keys)
+        {
+            if (!_currentCollisions.Contains(pair))
+            {
+                bool isTrigger = pair.Item1.IsTrigger || pair.Item2.IsTrigger;
+
+                if (isTrigger)
+                {
+                    OnTriggerExit?.Invoke(this, new CollisionEventArgs(pair.Item1, pair.Item2, new Collision()));
+                }
+                else
+                {
+                    OnCollisionExit?.Invoke(this, new CollisionEventArgs(pair.Item1, pair.Item2, new Collision()));
+                }
+
+                pair.Item1.CollisionListener?.OnCollisionExit(pair.Item2);
+                pair.Item2.CollisionListener?.OnCollisionExit(pair.Item1);
+            }
+        }
+
+        // Update previous collisions
+        _previousCollisions.Clear();
+        foreach (var pair in _currentCollisions)
+        {
+            _previousCollisions[pair] = true;
         }
     }
 

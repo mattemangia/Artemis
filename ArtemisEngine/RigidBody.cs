@@ -9,13 +9,32 @@ public class RigidBody
 
     public float Mass { get; set; }
     public float InverseMass { get; private set; }
+    public float Inertia { get; private set; }
+    public float InverseInertia { get; private set; }
+
     public float Restitution { get; set; } // Bounciness
     public float Friction { get; set; }
 
     public bool IsStatic { get; set; }
     public bool IsKinematic { get; set; }
+    public bool IsTrigger { get; set; } // Sensor - no physical collision
+
+    // Sleeping system
+    public bool IsSleeping { get; set; }
+    public bool CanSleep { get; set; } = true;
+    public float SleepTimer { get; set; }
+
+    // Collision filtering
+    public int CollisionLayer { get; set; } = CollisionLayers.Default;
+    public int CollisionMask { get; set; } = CollisionLayers.Everything;
+
+    // Collision callbacks
+    public ICollisionListener? CollisionListener { get; set; }
 
     public Shape Shape { get; set; }
+
+    // User data for game-specific information
+    public object? UserData { get; set; }
 
     public RigidBody(Vector2 position, float mass, Shape shape, bool isStatic = false)
     {
@@ -30,26 +49,79 @@ public class RigidBody
         Rotation = 0;
         Restitution = 0.5f;
         Friction = 0.3f;
+
+        // Calculate inertia
+        Inertia = shape.CalculateInertia(mass);
+        InverseInertia = Inertia > 0 ? 1.0f / Inertia : 0;
+
+        IsSleeping = false;
+        SleepTimer = 0;
     }
 
     public void ApplyForce(Vector2 force)
     {
-        if (IsStatic) return;
+        if (IsStatic || IsSleeping) return;
         Velocity += force * InverseMass;
+        WakeUp();
     }
 
     public void ApplyImpulse(Vector2 impulse)
     {
-        if (IsStatic) return;
+        if (IsStatic || IsSleeping) return;
         Velocity += impulse * InverseMass;
+        WakeUp();
+    }
+
+    public void ApplyImpulseAtPoint(Vector2 impulse, Vector2 point)
+    {
+        if (IsStatic || IsSleeping) return;
+
+        Velocity += impulse * InverseMass;
+
+        Vector2 r = point - Position;
+        float torque = Vector2.Cross(r, impulse);
+        AngularVelocity += torque * InverseInertia;
+
+        WakeUp();
+    }
+
+    public void ApplyTorque(float torque)
+    {
+        if (IsStatic || IsSleeping) return;
+        AngularVelocity += torque * InverseInertia;
+        WakeUp();
+    }
+
+    public void WakeUp()
+    {
+        if (!IsStatic)
+        {
+            IsSleeping = false;
+            SleepTimer = 0;
+        }
     }
 
     public void Update(float deltaTime)
     {
-        if (IsStatic) return;
+        if (IsStatic || IsSleeping) return;
 
         Position += Velocity * deltaTime;
         Rotation += AngularVelocity * deltaTime;
+    }
+
+    public bool CanCollideWith(RigidBody other)
+    {
+        // Static bodies don't collide with each other
+        if (IsStatic && other.IsStatic)
+            return false;
+
+        // Check layer filtering
+        if ((CollisionLayer & other.CollisionMask) == 0)
+            return false;
+        if ((other.CollisionLayer & CollisionMask) == 0)
+            return false;
+
+        return true;
     }
 }
 
