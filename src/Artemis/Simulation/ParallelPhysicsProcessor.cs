@@ -506,6 +506,14 @@ namespace Artemis.Simulation
         public bool[] IsAlive;
         public uint[] Color;
 
+        public double[] PositionsX => PosX;
+        public double[] PositionsY => PosY;
+        public double[] PositionsZ => PosZ;
+        public double[] VelocitiesX => VelX;
+        public double[] VelocitiesY => VelY;
+        public double[] VelocitiesZ => VelZ;
+        public double[] Lifetimes => Lifetime;
+
         /// <summary>
         /// Creates a SoA particle container.
         /// </summary>

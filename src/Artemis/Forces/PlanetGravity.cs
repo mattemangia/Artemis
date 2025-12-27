@@ -27,7 +27,7 @@ namespace Artemis.Forces
         /// <summary>
         /// Gravitational parameter (G * M)
         /// </summary>
-        public float Mu => PhysicsConstants.G * Mass;
+        public float Mu => (float)PhysicsConstants.G * Mass;
 
         /// <summary>
         /// Surface gravity
@@ -155,7 +155,7 @@ namespace Artemis.Forces
         public static GravitationalBody GamePlanet(float radius, float surfaceGravity = 9.81f)
         {
             // Calculate mass from desired surface gravity: g = GM/r² => M = gr²/G
-            float mass = surfaceGravity * radius * radius / PhysicsConstants.G;
+            float mass = surfaceGravity * radius * radius / (float)PhysicsConstants.G;
             return new GravitationalBody
             {
                 Name = "Planet",
@@ -173,7 +173,7 @@ namespace Artemis.Forces
         private readonly List<GravitationalBody> _bodies = new();
         private readonly Dictionary<RigidBody, GravitationalBody> _bodyMap = new();
 
-        public float GravitationalConstant { get; set; } = PhysicsConstants.G;
+        public float GravitationalConstant { get; set; } = (float)PhysicsConstants.G;
         public bool UseBarnesHut { get; set; } = true;  // Use Barnes-Hut algorithm for large N
         public float BarnesHutTheta { get; set; } = 0.5f;  // Accuracy parameter
         public float SofteningLength { get; set; } = 0.01f;  // Prevents singularity at r=0
@@ -322,8 +322,8 @@ namespace Artemis.Forces
             {
                 if (rb.IsStatic) continue;
 
-                Vector3 gravity = GetGravityAt(rb.Position);
-                rb.ApplyForce(gravity * rb.Mass);
+                Vector3 gravity = GetGravityAt((Vector3)rb.Position);
+                rb.ApplyForce((Vector3D)gravity * rb.Mass);
             }
         }
 
@@ -336,8 +336,8 @@ namespace Artemis.Forces
             {
                 if (!particle.IsActive) continue;
 
-                Vector3 gravity = GetGravityAt(particle.Position);
-                particle.Velocity += gravity * deltaTime;
+                Vector3 gravity = GetGravityAt((Vector3)particle.Position);
+                particle.Velocity += (Vector3D)gravity * deltaTime;
             }
         }
 
@@ -540,8 +540,8 @@ namespace Artemis.Forces
         /// </summary>
         public void ApplyTo(RigidBody body)
         {
-            Vector3 gravity = GetGravity(body.Position);
-            body.ApplyForce(gravity * body.Mass);
+            Vector3 gravity = GetGravity((Vector3)body.Position);
+            body.ApplyForce((Vector3D)gravity * body.Mass);
         }
 
         /// <summary>
@@ -661,8 +661,8 @@ namespace Artemis.Forces
             foreach (var body in bodies)
             {
                 if (body.IsStatic) continue;
-                Vector3 gravity = GetGravity(body.Position, useClosest);
-                body.ApplyForce(gravity * body.Mass);
+                Vector3 gravity = GetGravity((Vector3)body.Position, useClosest);
+                body.ApplyForce((Vector3D)gravity * body.Mass);
             }
         }
     }

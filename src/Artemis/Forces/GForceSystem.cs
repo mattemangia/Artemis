@@ -176,7 +176,7 @@ namespace Artemis.Forces
                 if (effectiveGForce >= limits.DamageThreshold)
                 {
                     data.TimeAboveThreshold += deltaTime;
-                    OnHighGForce?.Invoke(body, effectiveGForce, acceleration.Normalized());
+                    OnHighGForce?.Invoke(body, effectiveGForce, acceleration.Normalized);
 
                     if (data.TimeAboveThreshold >= limits.DamageDelay)
                     {
@@ -192,7 +192,7 @@ namespace Artemis.Forces
                         // Check for destruction
                         if (effectiveGForce >= limits.DestructionThreshold || data.AccumulatedDamage >= 1.0)
                         {
-                            _destructionQueue.Add((body, effectiveGForce, acceleration.Normalized()));
+                            _destructionQueue.Add((body, effectiveGForce, acceleration.Normalized));
                         }
                     }
                 }

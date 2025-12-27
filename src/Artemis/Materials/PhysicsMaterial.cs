@@ -86,6 +86,11 @@ namespace Artemis.Materials
         /// </summary>
         public double MeltingPoint { get; set; }
 
+        /// <summary>
+        /// Gets or sets the display color (ARGB).
+        /// </summary>
+        public uint Color { get; set; } = 0xFFFFFFFF;
+
         #endregion
 
         #region Derived Properties

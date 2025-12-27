@@ -150,7 +150,7 @@ namespace Artemis.Particles
         /// <summary>
         /// Creates a combustible from a flammable material preset.
         /// </summary>
-        public CombustibleObject RegisterCombustible(IPhysicsBody body, FlammableMaterial material)
+        public CombustibleObject RegisterCombustible(IPhysicsBody body, FlammableMaterialData material)
         {
             return RegisterCombustible(
                 body,
@@ -245,7 +245,7 @@ namespace Artemis.Particles
 
             foreach (var particle in water.Particles)
             {
-                if (!particle.IsAlive)
+                if (!particle.IsActive)
                     continue;
 
                 if (Vector3D.DistanceSquared(particle.Position, position) < radiusSq)
@@ -269,7 +269,7 @@ namespace Artemis.Particles
                 // Check if any water particle is near this fire particle
                 foreach (var waterParticle in water.Particles)
                 {
-                    if (!waterParticle.IsAlive)
+                    if (!waterParticle.IsActive)
                         continue;
 
                     if (Vector3D.DistanceSquared(fireParticles[i].Position, waterParticle.Position) < checkRadiusSq)

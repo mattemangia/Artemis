@@ -604,11 +604,11 @@ namespace Artemis.Forces
                 {
                     foreach (var body in celestialBodies)
                     {
-                        Vector3 toBody = body.Position - sc.Position;
+                        Vector3 toBody = (Vector3)body.Position - sc.Position;
                         float distance = toBody.Length();
                         if (distance > 0)
                         {
-                            float gravMag = body.Mu / (distance * distance);
+                        float gravMag = (float)(body.Mu / (distance * distance));
                             gravity += Vector3.Normalize(toBody) * gravMag;
                         }
                     }
@@ -620,11 +620,11 @@ namespace Artemis.Forces
                 {
                     foreach (var body in celestialBodies)
                     {
-                        float altitude = (sc.Position - body.Position).Length() - body.Radius;
-                        if (altitude < body.AtmosphereHeight && altitude >= 0)
+                        float altitude = (sc.Position - (Vector3)body.Position).Length() - (float)body.Radius;
+                        if (altitude < (float)body.AtmosphereHeight && altitude >= 0)
                         {
                             // Exponential atmosphere model
-                            float scaleHeight = body.AtmosphereHeight / 7f; // Approximate scale height
+                            float scaleHeight = (float)body.AtmosphereHeight / 7f; // Approximate scale height
                             atmosphericPressure = MathF.Max(atmosphericPressure,
                                 MathF.Exp(-altitude / scaleHeight));
                         }

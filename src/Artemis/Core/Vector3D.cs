@@ -82,12 +82,30 @@ namespace Artemis.Core
         }
 
         /// <summary>
+        /// Gets the length (alias for Magnitude).
+        /// </summary>
+        public readonly double Length
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => Magnitude;
+        }
+
+        /// <summary>
         /// Gets the squared magnitude of the vector (faster than Magnitude).
         /// </summary>
         public readonly double MagnitudeSquared
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => X * X + Y * Y + Z * Z;
+        }
+
+        /// <summary>
+        /// Gets the squared length (alias for MagnitudeSquared).
+        /// </summary>
+        public readonly double LengthSquared
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => MagnitudeSquared;
         }
 
         /// <summary>
@@ -104,6 +122,7 @@ namespace Artemis.Core
                 return Zero;
             }
         }
+
 
         #endregion
 
@@ -128,6 +147,14 @@ namespace Artemis.Core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vector3D operator /(Vector3D v, double scalar)
             => new(v.X / scalar, v.Y / scalar, v.Z / scalar);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static implicit operator System.Numerics.Vector3(Vector3D v)
+            => new((float)v.X, (float)v.Y, (float)v.Z);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static implicit operator Vector3D(System.Numerics.Vector3 v)
+            => new(v.X, v.Y, v.Z);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vector3D operator -(Vector3D v)

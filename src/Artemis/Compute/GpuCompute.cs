@@ -650,8 +650,8 @@ __kernel void computeDensity(
             }
 
             // Check collisions within cells
-            float radius = cellSize * 0.5f;
-            float radiusSq = radius * radius;
+            double radius = cellSize * 0.5f;
+            double radiusSq = radius * radius;
 
             Parallel.ForEach(cellToParticles.Values, cell =>
             {
@@ -662,21 +662,21 @@ __kernel void computeDensity(
                     {
                         int pj = cell[j];
 
-                        float dx = particles.PositionsX[pi] - particles.PositionsX[pj];
-                        float dy = particles.PositionsY[pi] - particles.PositionsY[pj];
-                        float dz = particles.PositionsZ[pi] - particles.PositionsZ[pj];
-                        float distSq = dx * dx + dy * dy + dz * dz;
+                        double dx = particles.PositionsX[pi] - particles.PositionsX[pj];
+                        double dy = particles.PositionsY[pi] - particles.PositionsY[pj];
+                        double dz = particles.PositionsZ[pi] - particles.PositionsZ[pj];
+                        double distSq = dx * dx + dy * dy + dz * dz;
 
                         if (distSq < radiusSq && distSq > 0.0001f)
                         {
-                            float dist = MathF.Sqrt(distSq);
-                            float overlap = radius - dist;
-                            float nx = dx / dist;
-                            float ny = dy / dist;
-                            float nz = dz / dist;
+                            double dist = Math.Sqrt(distSq);
+                            double overlap = radius - dist;
+                            double nx = dx / dist;
+                            double ny = dy / dist;
+                            double nz = dz / dist;
 
                             // Separate particles
-                            float separation = overlap * 0.5f;
+                            double separation = overlap * 0.5f;
                             particles.PositionsX[pi] += nx * separation;
                             particles.PositionsY[pi] += ny * separation;
                             particles.PositionsZ[pi] += nz * separation;
@@ -685,10 +685,10 @@ __kernel void computeDensity(
                             particles.PositionsZ[pj] -= nz * separation;
 
                             // Exchange velocities (simplified elastic collision)
-                            float dvx = particles.VelocitiesX[pi] - particles.VelocitiesX[pj];
-                            float dvy = particles.VelocitiesY[pi] - particles.VelocitiesY[pj];
-                            float dvz = particles.VelocitiesZ[pi] - particles.VelocitiesZ[pj];
-                            float dvn = dvx * nx + dvy * ny + dvz * nz;
+                            double dvx = particles.VelocitiesX[pi] - particles.VelocitiesX[pj];
+                            double dvy = particles.VelocitiesY[pi] - particles.VelocitiesY[pj];
+                            double dvz = particles.VelocitiesZ[pi] - particles.VelocitiesZ[pj];
+                            double dvn = dvx * nx + dvy * ny + dvz * nz;
 
                             if (dvn < 0)
                             {
@@ -742,33 +742,33 @@ __kernel void computeDensity(
             float stiffness)
         {
             int count = particles.Count;
-            float h = smoothingRadius;
-            float h2 = h * h;
-            float h9 = MathF.Pow(h, 9);
-            float poly6Const = 315.0f / (64.0f * MathF.PI * h9);
-            float spikyConst = -45.0f / (MathF.PI * MathF.Pow(h, 6));
-            float mass = 1.0f;
+            double h = smoothingRadius;
+            double h2 = h * h;
+            double h9 = Math.Pow(h, 9);
+            double poly6Const = 315.0 / (64.0 * Math.PI * h9);
+            double spikyConst = -45.0 / (Math.PI * Math.Pow(h, 6));
+            double mass = 1.0;
 
             // Compute densities (O(n²) - would use spatial hash in production)
-            var densities = new float[count];
+            var densities = new double[count];
 
             Parallel.For(0, count, i =>
             {
                 if (particles.Lifetimes[i] <= 0) return;
 
-                float density = 0;
+                double density = 0;
                 for (int j = 0; j < count; j++)
                 {
                     if (particles.Lifetimes[j] <= 0) continue;
 
-                    float dx = particles.PositionsX[i] - particles.PositionsX[j];
-                    float dy = particles.PositionsY[i] - particles.PositionsY[j];
-                    float dz = particles.PositionsZ[i] - particles.PositionsZ[j];
-                    float r2 = dx * dx + dy * dy + dz * dz;
+                    double dx = particles.PositionsX[i] - particles.PositionsX[j];
+                    double dy = particles.PositionsY[i] - particles.PositionsY[j];
+                    double dz = particles.PositionsZ[i] - particles.PositionsZ[j];
+                    double r2 = dx * dx + dy * dy + dz * dz;
 
                     if (r2 < h2)
                     {
-                        float w = h2 - r2;
+                        double w = h2 - r2;
                         density += mass * poly6Const * w * w * w;
                     }
                 }
@@ -780,36 +780,36 @@ __kernel void computeDensity(
             {
                 if (particles.Lifetimes[i] <= 0) return;
 
-                float pressure_i = stiffness * (densities[i] - restDensity);
-                float fx = 0, fy = 0, fz = 0;
+                double pressure_i = stiffness * (densities[i] - restDensity);
+                double fx = 0, fy = 0, fz = 0;
 
                 for (int j = 0; j < count; j++)
                 {
                     if (i == j || particles.Lifetimes[j] <= 0) continue;
 
-                    float dx = particles.PositionsX[i] - particles.PositionsX[j];
-                    float dy = particles.PositionsY[i] - particles.PositionsY[j];
-                    float dz = particles.PositionsZ[i] - particles.PositionsZ[j];
-                    float r2 = dx * dx + dy * dy + dz * dz;
+                    double dx = particles.PositionsX[i] - particles.PositionsX[j];
+                    double dy = particles.PositionsY[i] - particles.PositionsY[j];
+                    double dz = particles.PositionsZ[i] - particles.PositionsZ[j];
+                    double r2 = dx * dx + dy * dy + dz * dz;
 
                     if (r2 < h2 && r2 > 0.0001f)
                     {
-                        float r = MathF.Sqrt(r2);
-                        float pressure_j = stiffness * (densities[j] - restDensity);
-                        float avgPressure = (pressure_i + pressure_j) * 0.5f;
-                        float w = h - r;
-                        float gradient = spikyConst * w * w / r;
+                        double r = Math.Sqrt(r2);
+                        double pressure_j = stiffness * (densities[j] - restDensity);
+                        double avgPressure = (pressure_i + pressure_j) * 0.5;
+                        double w = h - r;
+                        double gradient = spikyConst * w * w / r;
 
-                        float force = -mass * avgPressure * gradient / densities[j];
+                        double force = -mass * avgPressure * gradient / densities[j];
                         fx += force * dx;
                         fy += force * dy;
                         fz += force * dz;
                     }
                 }
 
-                particles.VelocitiesX[i] += fx * 0.016f; // Assuming 60 FPS
-                particles.VelocitiesY[i] += fy * 0.016f;
-                particles.VelocitiesZ[i] += fz * 0.016f;
+                particles.VelocitiesX[i] += fx * 0.016; // Assuming 60 FPS
+                particles.VelocitiesY[i] += fy * 0.016;
+                particles.VelocitiesZ[i] += fz * 0.016;
             });
         }
 

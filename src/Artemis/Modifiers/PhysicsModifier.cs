@@ -103,7 +103,7 @@ namespace Artemis.Modifiers
         /// </summary>
         public WindModifier(Vector3D direction, double strength)
         {
-            BaseDirection = direction.Normalized();
+            BaseDirection = direction.Normalized;
             BaseStrength = strength;
         }
 
@@ -132,7 +132,7 @@ namespace Artemis.Modifiers
 
             // Calculate current wind
             _currentStrength = BaseStrength * (1 + gustFactor * (GustStrength - 1));
-            _currentDirection = (BaseDirection + new Vector3D(turbX, turbY, turbZ)).Normalized();
+            _currentDirection = (BaseDirection + new Vector3D(turbX, turbY, turbZ)).Normalized;
 
             // Erode erodible bodies
             foreach (var erodible in ErodibleBodies)
@@ -163,7 +163,7 @@ namespace Artemis.Modifiers
                 double area = EstimateArea(body);
                 double airDensity = 1.225; // kg/m³
                 double forceMagnitude = 0.5 * airDensity * speed * speed * BodyDragCoefficient * area;
-                var force = relativeVelocity.Normalized() * forceMagnitude;
+                var force = relativeVelocity.Normalized * forceMagnitude;
                 body.ApplyForce(force);
             }
         }
@@ -183,7 +183,7 @@ namespace Artemis.Modifiers
             {
                 double area = particle.Size * particle.Size * Math.PI;
                 double dragForce = 0.5 * 1.225 * speed * speed * 0.47 * area * ParticleDragMultiplier;
-                var acceleration = relativeVelocity.Normalized() * dragForce / particle.Mass;
+                var acceleration = relativeVelocity.Normalized * dragForce / particle.Mass;
                 particle.Velocity += acceleration * deltaTime;
             }
         }
@@ -372,7 +372,7 @@ namespace Artemis.Modifiers
             double forceMag = CalculateForce(distance);
             if (Repel) forceMag = -forceMag;
 
-            var force = toAttractor.Normalized() * forceMag;
+            var force = toAttractor.Normalized * forceMag;
             body.ApplyForce(force);
         }
 
@@ -388,7 +388,7 @@ namespace Artemis.Modifiers
             double forceMag = CalculateForce(distance);
             if (Repel) forceMag = -forceMag;
 
-            var acceleration = toAttractor.Normalized() * forceMag / particle.Mass;
+            var acceleration = toAttractor.Normalized * forceMag / particle.Mass;
             particle.Velocity += acceleration * deltaTime;
         }
 
@@ -529,11 +529,11 @@ namespace Artemis.Modifiers
             double strength = Math.Sin(t * Math.PI); // Peak at middle
 
             // Tangential force (rotation)
-            var tangent = Vector3D.Cross(Axis, radial.Normalized());
+            var tangent = Vector3D.Cross(Axis, radial.Normalized);
             var rotationalForce = tangent * RotationalStrength * strength;
 
             // Inward force
-            var inwardForce = -radial.Normalized() * InwardStrength * strength;
+            var inwardForce = -radial.Normalized * InwardStrength * strength;
 
             // Lift force
             var liftForce = Axis * LiftStrength * strength;

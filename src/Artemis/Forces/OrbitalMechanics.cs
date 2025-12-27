@@ -67,6 +67,12 @@ namespace Artemis.Forces
         /// <summary>Radius in meters.</summary>
         public double Radius { get; set; }
 
+        /// <summary>Atmosphere height in meters (0 if none).</summary>
+        public double AtmosphereHeight { get; set; }
+
+        /// <summary>Atmosphere density at the surface.</summary>
+        public double AtmosphereDensity { get; set; }
+
         /// <summary>Visual color (ARGB).</summary>
         public uint Color { get; set; } = 0xFFFFFFFF;
 
@@ -241,7 +247,7 @@ namespace Artemis.Forces
                     double dist = Math.Sqrt(distSq);
                     double forceMag = PhysicsConstants.GravitationalConstant * _bodies[j].Mass / distSq;
 
-                    accelerations[i] += r.Normalized() * forceMag;
+                    accelerations[i] += r.Normalized * forceMag;
                 }
             }
 
@@ -271,7 +277,7 @@ namespace Artemis.Forces
                     double distSq = r.MagnitudeSquared + Softening * Softening;
                     double forceMag = PhysicsConstants.GravitationalConstant * _bodies[j].Mass / distSq;
 
-                    newAccelerations[i] += r.Normalized() * forceMag;
+                    newAccelerations[i] += r.Normalized * forceMag;
                 }
             }
 
@@ -389,7 +395,7 @@ namespace Artemis.Forces
             double hMag = h.Magnitude;
 
             // Eccentricity vector
-            var eVec = Vector3D.Cross(v, h) / mu - r.Normalized();
+            var eVec = Vector3D.Cross(v, h) / mu - r.Normalized;
             double e = eVec.Magnitude;
 
             // Semi-major axis

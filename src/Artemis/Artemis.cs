@@ -672,7 +672,7 @@ namespace Artemis
         public static WindModifier CreateBreeze(Vector3D direction)
         {
             var wind = WindModifier.Breeze();
-            wind.BaseDirection = direction.Normalized();
+            wind.BaseDirection = direction.Normalized;
             return wind;
         }
 
@@ -682,7 +682,7 @@ namespace Artemis
         public static WindModifier CreateStrongWind(Vector3D direction)
         {
             var wind = WindModifier.Strong();
-            wind.BaseDirection = direction.Normalized();
+            wind.BaseDirection = direction.Normalized;
             return wind;
         }
 
@@ -692,7 +692,7 @@ namespace Artemis
         public static WindModifier CreateHurricane(Vector3D direction)
         {
             var wind = WindModifier.Hurricane();
-            wind.BaseDirection = direction.Normalized();
+            wind.BaseDirection = direction.Normalized;
             return wind;
         }
 
@@ -817,27 +817,27 @@ namespace Artemis
         /// <summary>
         /// Creates G-force limits for human passengers.
         /// </summary>
-        public static GForceLimits HumanGForceLimits() => GForceLimits.Human();
+        public static GForceSystem.GForceLimits HumanGForceLimits() => GForceSystem.HumanLimits();
 
         /// <summary>
         /// Creates G-force limits for trained pilots.
         /// </summary>
-        public static GForceLimits PilotGForceLimits() => GForceLimits.Pilot();
+        public static GForceSystem.GForceLimits PilotGForceLimits() => GForceSystem.PilotLimits();
 
         /// <summary>
         /// Creates G-force limits for aircraft structures.
         /// </summary>
-        public static GForceLimits AircraftGForceLimits() => GForceLimits.Aircraft();
+        public static GForceSystem.GForceLimits AircraftGForceLimits() => GForceSystem.AircraftLimits();
 
         /// <summary>
         /// Creates G-force limits for spacecraft.
         /// </summary>
-        public static GForceLimits SpacecraftGForceLimits() => GForceLimits.Spacecraft();
+        public static GForceSystem.GForceLimits SpacecraftGForceLimits() => GForceSystem.SpacecraftLimits();
 
         /// <summary>
         /// Creates G-force limits for fragile objects.
         /// </summary>
-        public static GForceLimits FragileGForceLimits() => GForceLimits.Fragile();
+        public static GForceSystem.GForceLimits FragileGForceLimits() => GForceSystem.FragileLimits();
 
         #endregion
 
@@ -855,7 +855,7 @@ namespace Artemis
         /// Creates a celestial body with the given parameters.
         /// </summary>
         public static CelestialBody CreateCelestialBody(
-            string name, double mass, double radius, System.Numerics.Vector3 position)
+            string name, double mass, double radius, Vector3D position)
         {
             return new CelestialBody
             {
@@ -869,22 +869,22 @@ namespace Artemis
         /// <summary>
         /// Creates an Earth celestial body.
         /// </summary>
-        public static CelestialBody CreateEarth() => CelestialBody.Earth();
+        public static CelestialBody CreateEarth() => OrbitalMechanics.CreateEarth();
 
         /// <summary>
         /// Creates a Moon celestial body.
         /// </summary>
-        public static CelestialBody CreateMoon() => CelestialBody.Moon();
+        public static CelestialBody CreateMoon() => OrbitalMechanics.CreateMoon();
 
         /// <summary>
         /// Creates a Sun celestial body.
         /// </summary>
-        public static CelestialBody CreateSun() => CelestialBody.Sun();
+        public static CelestialBody CreateSun() => OrbitalMechanics.CreateSun();
 
         /// <summary>
         /// Creates a Mars celestial body.
         /// </summary>
-        public static CelestialBody CreateMars() => CelestialBody.Mars();
+        public static CelestialBody CreateMars() => OrbitalMechanics.CreateMars();
 
         #endregion
 

@@ -59,6 +59,11 @@ namespace Artemis.Core
         public const double GravitationalConstant = 6.67430e-11;
 
         /// <summary>
+        /// Alias for the universal gravitational constant.
+        /// </summary>
+        public const double G = GravitationalConstant;
+
+        /// <summary>
         /// Speed of light in m/s.
         /// </summary>
         public const double SpeedOfLight = 299792458.0;

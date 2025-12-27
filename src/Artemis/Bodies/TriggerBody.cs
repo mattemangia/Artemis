@@ -126,7 +126,7 @@ namespace Artemis.Bodies
         /// <summary>
         /// Gets the IDs of currently overlapping bodies.
         /// </summary>
-        public IReadOnlySet<string> OverlappingBodies => _overlappingBodies;
+        public IReadOnlyCollection<string> OverlappingBodies => _overlappingBodies;
 
         /// <summary>
         /// Gets the number of overlapping bodies.
