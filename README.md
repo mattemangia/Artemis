@@ -50,7 +50,35 @@ Demo interattivo che mostra le funzionalità avanzate del motore Artemis:
    - Trigger zones senza fisica
    - Monitoraggio eventi in tempo reale
 
-## Controlli
+### ParticleColliderDemo 🔬
+Simulatore di acceleratore di particelle in stile LHC (Large Hadron Collider):
+
+**Caratteristiche Scientifiche:**
+- **7 Tipi di Particelle**: Protoni, elettroni, positroni, neutroni, fotoni, bosoni di Higgs, quark
+- **Fasci Controrotanti**: Due beam che circolano in direzioni opposte (come al LHC)
+- **Rilevatori Multi-Layer**: Tracker, calorimetri, camere per muoni
+- **Continuous Collision Detection**: Previene tunneling per particelle ad altissima velocità
+- **Energy Tracking**: Monitoraggio conservazione energia in tempo reale
+- **Decadimento Particelle**: Simulazione decay secondo emivita reale
+- **Prodotti di Collisione**: Creazione di nuove particelle nelle collisioni ad alta energia
+- **Esportazione Dati**: Export CSV per analisi scientifica
+- **Event Display**: Visualizzazione stile detector LHC con trail e energie
+
+**Fisica Realistica:**
+- Masse basate su valori reali (protone = 1 amu, elettrone = 1/2000 protone)
+- Carica elettrica (+1, 0, -1)
+- Energie in GeV (Giga-electronvolt)
+- Centro di massa energy (√s)
+- Conservazione energia e momento
+
+**Controlli:**
+- **SPAZIO**: Inietta nuovi fasci di particelle
+- **1/2/3**: Esperimenti specifici (p-p, e-e⁺, p-e)
+- **C**: Pulisci esperimento
+- **E**: Esporta dati scientifici
+- **Q**: Esci
+
+## Controlli Catapult Demo
 
 - **W/S**: Regola l'angolo di lancio (su/giù)
 - **A/D**: Regola la potenza del lancio (meno/più)
@@ -70,6 +98,9 @@ dotnet run --project PhysicsCatapultDemo/PhysicsCatapultDemo.csproj
 
 # Esegui Advanced Physics Demo
 dotnet run --project AdvancedPhysicsDemo/AdvancedPhysicsDemo.csproj
+
+# Esegui Particle Collider Demo (LHC Simulator)
+dotnet run --project ParticleColliderDemo/ParticleColliderDemo.csproj
 ```
 
 ## Caratteristiche del Motore Artemis
@@ -220,6 +251,13 @@ Il progetto è diviso in due componenti principali:
    - `ChainBuilder.cs`: Catene e ponti sospesi
    - `AdvancedRenderer.cs`: Rendering con visualizzazione joints e raycast
    - `Program.cs`: 5 scene interattive
+
+4. **ParticleColliderDemo**: Simulatore di fisica delle particelle
+   - `Particle.cs`: 7 tipi di particelle con proprietà reali (massa, carica, decay)
+   - `Accelerator.cs`: Anello acceleratore con fasci controrotanti e campo magnetico
+   - `Detector.cs`: Rilevatori multi-strato (tracker, calorimetri, muon chambers)
+   - `LHCRenderer.cs`: Visualizzazione stile LHC event display
+   - `Program.cs`: Loop simulazione con energy tracking e data export
 
 ## Esempi di Utilizzo
 
