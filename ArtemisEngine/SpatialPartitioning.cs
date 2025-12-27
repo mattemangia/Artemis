@@ -152,7 +152,7 @@ public class QuadTree
         for (int i = 0; i < 4; i++)
         {
             _children[i]?.Clear();
-            _children[i] = null;
+            _children[i] = null!;
         }
     }
 

@@ -6,8 +6,8 @@ namespace ArtemisEngine;
 /// </summary>
 public class ContactManifold
 {
-    public RigidBody BodyA { get; set; }
-    public RigidBody BodyB { get; set; }
+    public required RigidBody BodyA { get; set; }
+    public required RigidBody BodyB { get; set; }
     public List<ContactPoint> ContactPoints { get; set; } = new();
     public int FrameCount { get; set; } = 0; // How many frames this contact has persisted
 
