@@ -20,6 +20,12 @@
 - **Material System**: Elasticity, plasticity, ductility, friction properties
 - **SAT Collision**: Separating Axis Theorem for accurate box-box collisions
 - **Scientific Computing**: Precomputation, Monte Carlo, parameter sweeps, data export
+- **Orbital Mechanics**: Kepler orbits, N-body simulation, Hohmann transfers
+- **Propulsion Systems**: Rocket engines, staging, fuel consumption, delta-V
+- **G-Force System**: Acceleration tracking, damage accumulation, destruction
+- **Planet Gravity**: Game-scale planets (Mario Galaxy style), N-body systems
+- **Slope Stability**: Rockfall simulation, weathering, precomputed hazard zones
+- **State Transfer**: Bidirectional state capture, time reversal, undo/redo
 - **High Performance**: SIMD, multithreading, parallel processing, SoA data layouts
 - **Fluent API**: Intuitive, chainable configuration
 - **Extensible**: Easy to add custom forces, bodies, and behaviors
@@ -1444,6 +1450,458 @@ var waterZone = Physics.CreateWaterZone(poolBounds);
 // Mud/quicksand
 var mudZone = Physics.CreateMudZone(swampBounds);
 ```
+
+---
+
+## G-Force System
+
+Track acceleration and destroy objects under extreme G-forces.
+
+### Basic Usage
+
+```csharp
+// Create G-force system
+var gForce = Physics.CreateGForceSystem();
+
+// Register bodies with G-force limits
+gForce.Register(fighter, Physics.AircraftGForceLimits());
+gForce.Register(pilot, Physics.PilotGForceLimits());
+gForce.Register(fragilePayload, Physics.FragileGForceLimits());
+
+// Subscribe to destruction events
+gForce.OnDestruction += (body, gForces) =>
+{
+    Console.WriteLine($"{body.Id} destroyed at {gForces}G!");
+    // Trigger fracture, explosion, etc.
+};
+
+// Update each frame
+gForce.Update(deltaTime);
+```
+
+### G-Force Limits
+
+```csharp
+// Preset limits
+var human = Physics.HumanGForceLimits();      // 5G sustained, 9G peak
+var pilot = Physics.PilotGForceLimits();      // 9G sustained, 12G peak
+var aircraft = Physics.AircraftGForceLimits(); // 9G sustained, 15G peak
+var spacecraft = Physics.SpacecraftGForceLimits(); // 3G sustained, 8G peak
+var fragile = Physics.FragileGForceLimits();  // 2G sustained, 3G peak
+
+// Custom limits
+var custom = new GForceLimits
+{
+    MaxSustainedG = 8.0f,
+    MaxPeakG = 12.0f,
+    DamageThresholdG = 6.0f,
+    SustainedDuration = 3.0f  // Seconds before damage
+};
+```
+
+---
+
+## Orbital Mechanics
+
+Simulate celestial bodies, Kepler orbits, and space missions.
+
+### Kepler Orbits
+
+```csharp
+// Create orbital mechanics system
+var orbital = Physics.CreateOrbitalMechanics();
+
+// Add celestial bodies
+var earth = Physics.CreateEarth();
+var moon = Physics.CreateMoon();
+orbital.AddBody(earth);
+orbital.AddBody(moon);
+
+// Calculate orbit parameters
+var elements = orbital.CalculateOrbitalElements(satellite, earth);
+Console.WriteLine($"Semi-major axis: {elements.SemiMajorAxis}m");
+Console.WriteLine($"Eccentricity: {elements.Eccentricity}");
+Console.WriteLine($"Period: {elements.Period}s");
+
+// Propagate orbit
+var futurePos = orbital.PropagateOrbit(elements, deltaTime);
+```
+
+### N-Body Simulation
+
+```csharp
+// Create solar system
+var sun = Physics.CreateSun();
+var earth = Physics.CreateEarth();
+var mars = Physics.CreateMars();
+
+orbital.AddBody(sun);
+orbital.AddBody(earth);
+orbital.AddBody(mars);
+
+// Update (computes gravitational interactions)
+orbital.Update(deltaTime);
+```
+
+### Hohmann Transfer
+
+```csharp
+// Calculate transfer orbit
+var transfer = orbital.CalculateHohmannTransfer(
+    fromBody: earth,
+    toBody: mars,
+    spacecraft: probe
+);
+
+Console.WriteLine($"Delta-V required: {transfer.TotalDeltaV}m/s");
+Console.WriteLine($"Transfer time: {transfer.TransferTime}s");
+Console.WriteLine($"Departure burn: {transfer.DepartureDeltaV}m/s");
+Console.WriteLine($"Arrival burn: {transfer.ArrivalDeltaV}m/s");
+```
+
+---
+
+## Propulsion Systems
+
+Realistic rocket engine simulation with staging and fuel consumption.
+
+### Basic Spacecraft
+
+```csharp
+// Create propulsion system
+var propulsion = Physics.CreatePropulsionSystem();
+
+// Use preset spacecraft
+var falcon9 = Physics.CreateFalcon9();
+var saturnV = Physics.CreateSaturnV();
+var ionProbe = Physics.CreateIonProbe();
+
+propulsion.AddSpacecraft(falcon9);
+
+// Control throttle
+falcon9.CurrentStage.SetThrottle(1.0f);  // Full thrust
+
+// Update
+propulsion.Update(deltaTime);
+
+// Check stats
+Console.WriteLine($"Delta-V remaining: {falcon9.TotalDeltaV}m/s");
+Console.WriteLine($"Fuel: {falcon9.CurrentStage?.PropellantMass}kg");
+```
+
+### Custom Spacecraft
+
+```csharp
+var spacecraft = new Spacecraft { Name = "Custom Rocket" };
+
+// First stage
+var stage1 = new PropulsionStage { Name = "Stage 1", DryMass = 5000 };
+stage1.Engines.Add(Engine.Merlin1D());
+stage1.Engines.Add(Engine.Merlin1D());
+stage1.Propellants.Add(Propellant.RP1(50000));
+stage1.Propellants.Add(Propellant.LiquidOxygen(100000));
+
+// Second stage
+var stage2 = new PropulsionStage { Name = "Stage 2", DryMass = 1000 };
+stage2.Engines.Add(Engine.IonThruster());
+stage2.Propellants.Add(Propellant.Xenon(200));
+
+spacecraft.Stages.Add(stage1);
+spacecraft.Stages.Add(stage2);
+spacecraft.CurrentStageIndex = 0;
+stage1.ActivateEngines();
+```
+
+### Engine Types
+
+```csharp
+var merlin = Physics.CreateMerlin1DEngine();   // Falcon 9 engine
+var raptor = Physics.CreateRaptorEngine();      // Starship engine
+var ion = Physics.CreateIonThruster();          // High-efficiency ion drive
+var rcs = Physics.CreateRCSThruster();          // Attitude control
+
+// Engine presets
+Engine.Merlin1D();       // 845 kN, Isp 311s
+Engine.Raptor();         // 1850 kN, Isp 380s
+Engine.RL10();           // 110 kN, Isp 465s (vacuum)
+Engine.IonThruster();    // 0.236 N, Isp 4190s
+Engine.HallThruster();   // 0.29 N, Isp 1770s
+Engine.SolidBooster();   // 11.8 MN, Isp 268s
+```
+
+---
+
+## Planet Gravity
+
+Game-scale planetary gravity (like Mario Galaxy).
+
+### Single Planet
+
+```csharp
+// Create game-scale planet
+var planet = Physics.CreatePointGravity(
+    center: Vector3.Zero,
+    strength: 9.81f,
+    radius: 10f
+);
+
+// Apply to player
+Vector3 gravity = planet.GetGravity(playerPosition);
+player.Velocity += gravity * deltaTime;
+
+// Get "up" direction (for orientation)
+Vector3 up = planet.GetUpDirection(playerPosition);
+```
+
+### Multiple Planets
+
+```csharp
+// Create multi-planet system
+var planets = Physics.CreateMultiPointGravity();
+
+planets.AddPoint(new PointGravity { Center = pos1, Strength = 9.81f, Radius = 5f });
+planets.AddPoint(new PointGravity { Center = pos2, Strength = 6.0f, Radius = 3f });
+planets.AddPoint(new PointGravity { Center = pos3, Strength = 12.0f, Radius = 8f });
+
+// Gravity uses closest planet
+Vector3 gravity = planets.GetGravity(playerPosition, useClosest: true);
+
+// Find which planet player is on
+var dominant = planets.GetDominantPoint(playerPosition);
+```
+
+### Realistic N-Body
+
+```csharp
+// Create N-body system
+var gravitySystem = Physics.CreatePlanetGravitySystem();
+
+// Add planets with realistic parameters
+gravitySystem.AddBody(Physics.CreateEarthGravity());
+gravitySystem.AddBody(Physics.CreateMoonGravity());
+
+// Apply to rigid bodies
+gravitySystem.ApplyToRigidBodies(world.Bodies, deltaTime);
+
+// Detect collisions/mergers
+var collisions = gravitySystem.DetectCollisions();
+foreach (var (a, b) in collisions)
+{
+    var merged = gravitySystem.MergeBodies(a, b);
+}
+```
+
+---
+
+## Slope Stability & Rockfall
+
+Simulate landslides, rockfalls, and terrain stability.
+
+### Real-Time Rockfall
+
+```csharp
+// Create slope stability system
+var slope = Physics.CreateSlopeStabilitySystem();
+
+// Set terrain height function
+slope.SetTerrainFunction(
+    heightFunc: pos => GetTerrainHeight(pos),
+    normalFunc: pos => GetTerrainNormal(pos)
+);
+
+// Add slope cells for analysis
+for (int x = 0; x < 100; x++)
+{
+    for (int z = 0; z < 100; z++)
+    {
+        slope.AddCell(new SlopeCell
+        {
+            Position = new Vector3(x, GetHeight(x, z), z),
+            Normal = GetNormal(x, z),
+            Height = 5.0f,
+            Mass = 1000f,
+            Material = Physics.RockMaterial()
+        });
+    }
+}
+
+// Analyze stability
+slope.AnalyzeAllCells();
+var unstable = slope.FindUnstableCells(threshold: 1.0f);
+
+// Trigger collapse
+foreach (var cell in unstable)
+{
+    slope.TriggerCollapse(cell, fragmentCount: 15);
+}
+
+// Update rockfall
+slope.Update(deltaTime);
+
+// Render fragments
+foreach (var fragment in slope.ActiveFragments)
+{
+    if (fragment.IsActive)
+        RenderRock(fragment.Position, fragment.Radius);
+}
+```
+
+### Precomputed Rockfall
+
+```csharp
+// Precompute rockfall for hazard mapping
+var precomputed = slope.PrecomputeRockfall(
+    sourcePosition: cliffTop,
+    sourceMass: 5000f,
+    material: Physics.RockMaterial(),
+    duration: 30f,
+    timeStep: 0.02f,
+    fragmentCount: 50
+);
+
+Console.WriteLine($"Max runout: {precomputed.FinalResult.MaxRunoutDistance}m");
+Console.WriteLine($"Max energy: {precomputed.FinalResult.MaxEnergy}J");
+
+// Play forward
+for (float t = 0; t < precomputed.TotalDuration; t += 0.1f)
+{
+    var frame = precomputed.GetFrame(t);
+    // Render frame
+}
+
+// Play in reverse
+for (float t = precomputed.TotalDuration; t >= 0; t -= 0.1f)
+{
+    var frame = precomputed.GetFrameReverse(t);
+    // Render reversed
+}
+```
+
+### Slope Materials
+
+```csharp
+var rock = Physics.RockMaterial();     // Angle of repose: 45°
+var gravel = Physics.GravelMaterial(); // Angle of repose: 35°
+var sand = Physics.SandMaterial();     // Angle of repose: 34°
+var clay = Physics.ClayMaterial();     // Angle of repose: 25°
+var soil = Physics.SoilMaterial();     // Angle of repose: 30°
+var ice = Physics.IceMaterial();       // Angle of repose: 35°
+var snow = Physics.SnowMaterial();     // Angle of repose: 38°
+```
+
+### Weather Effects
+
+```csharp
+// Apply rainfall (increases saturation, reduces stability)
+slope.ApplyRainfall(intensity: 0.1f, deltaTime);
+
+// Apply drainage
+slope.ApplyDrainage(rate: 0.02f, deltaTime);
+
+// Apply weathering over time
+slope.ApplyWeathering(deltaTime);
+```
+
+---
+
+## State Transfer & Time Reversal
+
+Capture, save, and reverse physics states.
+
+### Basic State Capture
+
+```csharp
+// Create state transfer system
+var stateTransfer = Physics.CreateStateTransfer();
+
+// Capture current state
+var state = stateTransfer.CaptureState(world.Bodies, currentTime, "Checkpoint1");
+
+// Later, restore state
+stateTransfer.ApplyState(state, world.Bodies);
+```
+
+### Undo/Redo
+
+```csharp
+// Push states to history
+stateTransfer.PushState(stateTransfer.CaptureState(bodies, time));
+
+// Undo (go back)
+if (stateTransfer.CanUndo)
+{
+    var prevState = stateTransfer.Undo();
+    stateTransfer.ApplyState(prevState, bodies);
+}
+
+// Redo (go forward)
+if (stateTransfer.CanRedo)
+{
+    var nextState = stateTransfer.Redo();
+    stateTransfer.ApplyState(nextState, bodies);
+}
+```
+
+### Time Reversal
+
+```csharp
+// Capture final state
+var finalState = stateTransfer.CaptureState(bodies, time);
+finalState.Metadata.IsFinalState = true;
+
+// Create reversed state (velocities negated)
+var reversed = stateTransfer.CreateReversedState(finalState);
+
+// Use final as initial (for playing simulation backwards)
+var initialFromFinal = stateTransfer.FinalToInitial(finalState, reverseVelocities: true);
+
+// Apply and run simulation backwards
+stateTransfer.ApplyState(initialFromFinal, bodies);
+```
+
+### Recording and Playback
+
+```csharp
+// Create recorder
+var recorder = Physics.CreateSimulationRecorder();
+recorder.RecordInterval = 0.02f;  // 50 FPS
+
+// Start recording
+recorder.StartRecording();
+
+// During simulation
+recorder.RecordFrame(stateTransfer.CaptureState(bodies, time), deltaTime);
+
+// Stop recording
+recorder.StopRecording();
+
+// Playback forward
+foreach (var state in recorder.PlayForward(recorder.GetAllFrames()))
+{
+    stateTransfer.ApplyState(state, bodies);
+    Render();
+}
+
+// Playback reverse
+foreach (var state in recorder.PlaybackReverse(stateTransfer))
+{
+    stateTransfer.ApplyState(state, bodies);
+    Render();
+}
+```
+
+### Save/Load State
+
+```csharp
+// Save state to file
+stateTransfer.SaveToFile(state, "checkpoint.state", compress: true);
+
+// Load state from file
+var loaded = stateTransfer.LoadFromFile("checkpoint.state");
+stateTransfer.ApplyState(loaded, bodies);
+```
+
+---
 
 ### Modifier System
 

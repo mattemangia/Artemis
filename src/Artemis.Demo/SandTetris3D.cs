@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using Artemis;
 using Artemis.Core;
 using Artemis.Particles;
@@ -16,6 +17,9 @@ namespace Artemis.Demo
     /// - If sand of the same color connects from one side to the other, it disappears
     /// - You lose if the terrarium fills up
     /// - You win if you create a hole at the bottom
+    ///
+    /// The terrarium is THIN (not a 3D cube) to make it playable for humans.
+    /// A full 3D Tetris would be too difficult.
     /// </summary>
     public class SandTetris3D
     {
@@ -23,12 +27,13 @@ namespace Artemis.Demo
 
         private const double TerrariumWidth = 10.0;
         private const double TerrariumHeight = 15.0;
-        private const double TerrariumDepth = 10.0;
-        private const double MinBallRadius = 0.8;
-        private const double MaxBallRadius = 2.0;
-        private const double ParticleRadius = 0.15;
+        private const double TerrariumDepth = 2.5;  // THIN terrarium for playability
+        private const double MinBallRadius = 0.6;
+        private const double MaxBallRadius = 1.5;
+        private const double ParticleRadius = 0.12;
         private const int ScorePerClear = 100;
         private const int BonusPerChain = 50;
+        private const float ShineAnimationDuration = 1.5f;  // Seconds before layer disappears
 
         #endregion
 
@@ -37,12 +42,22 @@ namespace Artemis.Demo
         private readonly SandSimulation _simulation;
         private readonly Random _random;
         private readonly uint[] _colors;
+        private readonly Stopwatch _performanceTimer;
         private int _score;
         private int _turn;
         private int _lastGroupId;
         private bool _gameOver;
         private bool _victory;
         private SandBallInfo _currentBall;
+
+        // Shining layer animation
+        private readonly Dictionary<int, float> _shiningParticles;
+        private readonly HashSet<int> _particlesToRemove;
+
+        // Performance tracking
+        private double _lastUpdateTimeMs;
+        private double _averageUpdateTimeMs;
+        private int _updateCount;
 
         #endregion
 
@@ -83,6 +98,42 @@ namespace Artemis.Demo
         /// </summary>
         public AABB TerrariumBounds => _simulation.Bounds;
 
+        /// <summary>
+        /// Gets the current particle count (real-time grain counter).
+        /// </summary>
+        public int ParticleCount => _simulation.ParticleCount;
+
+        /// <summary>
+        /// Gets the active particle count.
+        /// </summary>
+        public int ActiveParticleCount => _simulation.ActiveParticleCount;
+
+        /// <summary>
+        /// Gets the last update time in milliseconds.
+        /// </summary>
+        public double LastUpdateTimeMs => _lastUpdateTimeMs;
+
+        /// <summary>
+        /// Gets the average update time in milliseconds.
+        /// </summary>
+        public double AverageUpdateTimeMs => _averageUpdateTimeMs;
+
+        /// <summary>
+        /// Gets particles that are currently shining (about to disappear).
+        /// Key is particle index, value is shine progress (0-1).
+        /// </summary>
+        public IReadOnlyDictionary<int, float> ShiningParticles => _shiningParticles;
+
+        /// <summary>
+        /// Gets performance stats as a formatted string.
+        /// </summary>
+        public string PerformanceStats => $"Grains: {ActiveParticleCount} | Update: {_lastUpdateTimeMs:F1}ms | Avg: {_averageUpdateTimeMs:F1}ms";
+
+        /// <summary>
+        /// Gets the grain counter dialog text.
+        /// </summary>
+        public string GrainCounterDialog => $"Sand Grains: {ActiveParticleCount:N0}";
+
         #endregion
 
         #region Constructor
@@ -90,20 +141,24 @@ namespace Artemis.Demo
         /// <summary>
         /// Creates a new Sand Tetris 3D game.
         /// </summary>
-        public SandTetris3D()
+        /// <param name="startWithRandomTopography">If true, starts with random disconnected sand layers.</param>
+        public SandTetris3D(bool startWithRandomTopography = true)
         {
             var bounds = new AABB(
                 new Vector3D(-TerrariumWidth / 2, 0, -TerrariumDepth / 2),
                 new Vector3D(TerrariumWidth / 2, TerrariumHeight, TerrariumDepth / 2)
             );
 
-            _simulation = Physics.CreateSandSimulation(bounds, ParticleRadius * 3);
+            _simulation = Physics.CreateSandSimulation(bounds, ParticleRadius * 2.5);
             _simulation.ParticleRadius = ParticleRadius;
-            _simulation.Friction = 0.4;
-            _simulation.Restitution = 0.1;
+            _simulation.Friction = 0.35;      // Slightly less friction for better flow
+            _simulation.Restitution = 0.08;   // Lower bounce for stability
 
             _random = new Random();
             _lastGroupId = 0;
+            _performanceTimer = new Stopwatch();
+            _shiningParticles = new Dictionary<int, float>();
+            _particlesToRemove = new HashSet<int>();
 
             // Define 6 distinct colors (ARGB format)
             _colors = new uint[]
@@ -120,8 +175,104 @@ namespace Artemis.Demo
             _turn = 0;
             _gameOver = false;
             _victory = false;
+            _updateCount = 0;
+            _averageUpdateTimeMs = 0;
+
+            if (startWithRandomTopography)
+            {
+                GenerateRandomTopography();
+            }
 
             GenerateNextBall();
+        }
+
+        #endregion
+
+        #region Random Topography
+
+        /// <summary>
+        /// Generates random disconnected sand layers as starting topography.
+        /// These create opportunities for connections without making the game too easy.
+        /// </summary>
+        private void GenerateRandomTopography()
+        {
+            int numClusters = _random.Next(4, 8);  // 4-7 clusters
+
+            for (int i = 0; i < numClusters; i++)
+            {
+                uint color = _colors[_random.Next(_colors.Length)];
+
+                // Random position in lower half of terrarium
+                double x = (_random.NextDouble() - 0.5) * (TerrariumWidth - 2);
+                double y = _random.NextDouble() * (TerrariumHeight * 0.3) + 0.5;  // Lower 30%
+                double z = (_random.NextDouble() - 0.5) * (TerrariumDepth - 0.5);
+
+                // Random cluster shape - either horizontal layer or small pile
+                bool isHorizontalLayer = _random.NextDouble() > 0.5;
+
+                if (isHorizontalLayer)
+                {
+                    // Create a thin horizontal layer (not spanning full width - gaps for connections)
+                    double layerWidth = TerrariumWidth * (0.2 + _random.NextDouble() * 0.3);  // 20-50% width
+                    double layerDepth = TerrariumDepth * 0.8;
+                    double layerHeight = ParticleRadius * (3 + _random.Next(4));
+
+                    AddSandLayer(
+                        new Vector3D(x, y, z),
+                        layerWidth, layerHeight, layerDepth,
+                        color
+                    );
+                }
+                else
+                {
+                    // Create a small pile
+                    double pileRadius = 0.4 + _random.NextDouble() * 0.6;
+                    _simulation.AddSandBall(
+                        new Vector3D(x, y + pileRadius, z),
+                        pileRadius,
+                        color,
+                        ParticleRadius
+                    );
+                }
+            }
+
+            // Let the initial topography settle briefly
+            for (int i = 0; i < 10; i++)
+            {
+                _simulation.Update(0.02);
+            }
+        }
+
+        /// <summary>
+        /// Adds a rectangular layer of sand.
+        /// </summary>
+        private void AddSandLayer(Vector3D center, double width, double height, double depth, uint color)
+        {
+            double spacing = ParticleRadius * 2.2;
+
+            int countX = (int)(width / spacing);
+            int countY = (int)(height / spacing);
+            int countZ = (int)(depth / spacing);
+
+            for (int ix = 0; ix < countX; ix++)
+            {
+                for (int iy = 0; iy < countY; iy++)
+                {
+                    for (int iz = 0; iz < countZ; iz++)
+                    {
+                        double px = center.X - width / 2 + ix * spacing + spacing / 2;
+                        double py = center.Y - height / 2 + iy * spacing + spacing / 2;
+                        double pz = center.Z - depth / 2 + iz * spacing + spacing / 2;
+
+                        // Add small random offset for natural look
+                        px += (_random.NextDouble() - 0.5) * ParticleRadius * 0.3;
+                        py += (_random.NextDouble() - 0.5) * ParticleRadius * 0.3;
+                        pz += (_random.NextDouble() - 0.5) * ParticleRadius * 0.3;
+
+                        _simulation.AddParticle(new Vector3D(px, py, pz), Vector3D.Zero, color);
+                    }
+                }
+            }
         }
 
         #endregion
@@ -177,19 +328,11 @@ namespace Artemis.Demo
                 ParticleRadius
             );
 
-            // Assign group ID to all new particles
-            for (int i = startIndex; i < startIndex + count && i < _simulation.Particles.Count; i++)
-            {
-                var p = _simulation.Particles[i];
-                // Note: Since SandParticle is a struct, we need to handle this differently
-                // For now, we track the last dropped particles by index range
-            }
-
             return true;
         }
 
         /// <summary>
-        /// Updates the simulation.
+        /// Updates the simulation with performance tracking.
         /// </summary>
         /// <param name="deltaTime">Time step in seconds.</param>
         public void Update(double deltaTime)
@@ -197,97 +340,164 @@ namespace Artemis.Demo
             if (_gameOver)
                 return;
 
-            // Run simulation
-            _simulation.Update(deltaTime);
+            _performanceTimer.Restart();
+
+            // Update shining particles animation
+            UpdateShiningParticles((float)deltaTime);
+
+            // Run simulation with substeps for stability
+            int substeps = deltaTime > 0.02 ? 2 : 1;
+            double subDt = deltaTime / substeps;
+
+            for (int i = 0; i < substeps; i++)
+            {
+                _simulation.Update(subDt);
+            }
+
+            _performanceTimer.Stop();
+            _lastUpdateTimeMs = _performanceTimer.Elapsed.TotalMilliseconds;
+
+            // Update rolling average
+            _updateCount++;
+            _averageUpdateTimeMs = _averageUpdateTimeMs + (_lastUpdateTimeMs - _averageUpdateTimeMs) / Math.Min(_updateCount, 100);
         }
 
         /// <summary>
-        /// Checks for completed lines and clears them.
+        /// Updates the shining particle animation.
+        /// </summary>
+        private void UpdateShiningParticles(float deltaTime)
+        {
+            _particlesToRemove.Clear();
+
+            foreach (var kvp in _shiningParticles)
+            {
+                float newProgress = kvp.Value + deltaTime / ShineAnimationDuration;
+
+                if (newProgress >= 1.0f)
+                {
+                    _particlesToRemove.Add(kvp.Key);
+                }
+                else
+                {
+                    _shiningParticles[kvp.Key] = newProgress;
+                }
+            }
+
+            // Remove particles that finished shining
+            foreach (int idx in _particlesToRemove)
+            {
+                _simulation.RemoveParticle(idx);
+                _shiningParticles.Remove(idx);
+            }
+        }
+
+        /// <summary>
+        /// Checks for completed lines and starts the shining animation.
         /// Should be called after simulation settles.
         /// </summary>
-        /// <returns>Number of particles cleared.</returns>
+        /// <returns>Number of particles that will be cleared.</returns>
         public int CheckAndClearLines()
         {
-            int totalCleared = 0;
+            int totalToRemove = 0;
 
             // Check each color
             foreach (uint color in _colors)
             {
-                // Check if color spans from left to right (X axis)
+                // Check if color spans from left to right (X axis) - primary clear direction
                 if (_simulation.CheckSpansAxis(color, 0))
                 {
-                    // Find and remove all connected particles of this color
-                    var toRemove = new List<int>();
-
-                    for (int i = 0; i < _simulation.Particles.Count; i++)
-                    {
-                        var p = _simulation.Particles[i];
-                        if (p.IsActive && p.Color == color)
-                        {
-                            var connected = _simulation.FindConnectedParticles(i);
-                            // Check if this group spans the X axis
-                            bool spansX = CheckGroupSpansAxis(connected, 0);
-                            if (spansX)
-                            {
-                                foreach (int idx in connected)
-                                {
-                                    if (!toRemove.Contains(idx))
-                                        toRemove.Add(idx);
-                                }
-                            }
-                        }
-                    }
-
-                    // Remove particles
-                    foreach (int idx in toRemove)
-                    {
-                        _simulation.RemoveParticle(idx);
-                    }
-
-                    if (toRemove.Count > 0)
-                    {
-                        _score += ScorePerClear + (toRemove.Count * 10);
-                        totalCleared += toRemove.Count;
-                    }
-                }
-
-                // Also check Z axis
-                if (_simulation.CheckSpansAxis(color, 2))
-                {
-                    var toRemove = new List<int>();
-
-                    for (int i = 0; i < _simulation.Particles.Count; i++)
-                    {
-                        var p = _simulation.Particles[i];
-                        if (p.IsActive && p.Color == color)
-                        {
-                            var connected = _simulation.FindConnectedParticles(i);
-                            bool spansZ = CheckGroupSpansAxis(connected, 2);
-                            if (spansZ)
-                            {
-                                foreach (int idx in connected)
-                                {
-                                    if (!toRemove.Contains(idx))
-                                        toRemove.Add(idx);
-                                }
-                            }
-                        }
-                    }
-
-                    foreach (int idx in toRemove)
-                    {
-                        _simulation.RemoveParticle(idx);
-                    }
-
-                    if (toRemove.Count > 0)
-                    {
-                        _score += ScorePerClear + (toRemove.Count * 10);
-                        totalCleared += toRemove.Count;
-                    }
+                    var toShine = FindSpanningParticles(color, 0);
+                    StartShiningAnimation(toShine);
+                    totalToRemove += toShine.Count;
                 }
             }
 
-            return totalCleared;
+            if (totalToRemove > 0)
+            {
+                _score += ScorePerClear + (totalToRemove * 10);
+            }
+
+            return totalToRemove;
+        }
+
+        /// <summary>
+        /// Finds all particles of a color that are part of a spanning connection.
+        /// </summary>
+        private List<int> FindSpanningParticles(uint color, int axis)
+        {
+            var result = new List<int>();
+            var visited = new HashSet<int>();
+
+            for (int i = 0; i < _simulation.Particles.Count; i++)
+            {
+                if (visited.Contains(i)) continue;
+
+                var p = _simulation.Particles[i];
+                if (!p.IsActive || p.Color != color) continue;
+
+                var connected = _simulation.FindConnectedParticles(i);
+
+                foreach (int idx in connected)
+                {
+                    visited.Add(idx);
+                }
+
+                if (CheckGroupSpansAxis(connected, axis))
+                {
+                    result.AddRange(connected);
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Starts the shining animation for particles about to be removed.
+        /// </summary>
+        private void StartShiningAnimation(List<int> particleIndices)
+        {
+            foreach (int idx in particleIndices)
+            {
+                if (!_shiningParticles.ContainsKey(idx))
+                {
+                    _shiningParticles[idx] = 0;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets the shine color for a particle (brightened version of original).
+        /// </summary>
+        public uint GetShineColor(int particleIndex, uint originalColor)
+        {
+            if (!_shiningParticles.TryGetValue(particleIndex, out float progress))
+            {
+                return originalColor;
+            }
+
+            // Pulse effect: sine wave oscillation
+            float pulse = (float)(Math.Sin(progress * Math.PI * 4) * 0.5 + 0.5);
+            float brightness = 0.5f + pulse * 0.5f;
+
+            // Extract RGB
+            byte r = (byte)((originalColor >> 16) & 0xFF);
+            byte g = (byte)((originalColor >> 8) & 0xFF);
+            byte b = (byte)(originalColor & 0xFF);
+
+            // Brighten
+            r = (byte)Math.Min(255, r + (int)(255 - r) * brightness);
+            g = (byte)Math.Min(255, g + (int)(255 - g) * brightness);
+            b = (byte)Math.Min(255, b + (int)(255 - b) * brightness);
+
+            return 0xFF000000 | ((uint)r << 16) | ((uint)g << 8) | b;
+        }
+
+        /// <summary>
+        /// Checks if a particle is currently shining.
+        /// </summary>
+        public bool IsParticleShining(int particleIndex)
+        {
+            return _shiningParticles.ContainsKey(particleIndex);
         }
 
         private bool CheckGroupSpansAxis(List<int> indices, int axis)
@@ -311,15 +521,16 @@ namespace Artemis.Demo
                 max = Math.Max(max, val);
             }
 
-            double threshold = axis switch
+            double axisSize = axis switch
             {
-                0 => TerrariumWidth * 0.8,
-                1 => TerrariumHeight * 0.8,
-                2 => TerrariumDepth * 0.8,
+                0 => TerrariumWidth,
+                1 => TerrariumHeight,
+                2 => TerrariumDepth,
                 _ => 0
             };
 
-            return (max - min) >= threshold;
+            // Require 75% span for a match
+            return (max - min) >= axisSize * 0.75;
         }
 
         /// <summary>
@@ -361,14 +572,24 @@ namespace Artemis.Demo
         /// <summary>
         /// Resets the game.
         /// </summary>
-        public void Reset()
+        /// <param name="withRandomTopography">If true, generates random starting topography.</param>
+        public void Reset(bool withRandomTopography = true)
         {
             _simulation.Clear();
+            _shiningParticles.Clear();
             _score = 0;
             _turn = 0;
             _gameOver = false;
             _victory = false;
             _lastGroupId = 0;
+            _updateCount = 0;
+            _averageUpdateTimeMs = 0;
+
+            if (withRandomTopography)
+            {
+                GenerateRandomTopography();
+            }
+
             GenerateNextBall();
         }
 
@@ -463,6 +684,18 @@ namespace Artemis.Demo
         public (double width, double height, double depth) GetTerrariumSize()
         {
             return (TerrariumWidth, TerrariumHeight, TerrariumDepth);
+        }
+
+        /// <summary>
+        /// Gets a formatted string for the real-time grain counter dialog.
+        /// </summary>
+        public string GetGrainCounterText()
+        {
+            return $"=== Sand Grains ===\n" +
+                   $"Active: {ActiveParticleCount:N0}\n" +
+                   $"Total: {ParticleCount:N0}\n" +
+                   $"Shining: {_shiningParticles.Count}\n" +
+                   $"Update: {_lastUpdateTimeMs:F1}ms";
         }
 
         #endregion

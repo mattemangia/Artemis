@@ -801,5 +801,269 @@ namespace Artemis
         }
 
         #endregion
+
+        #region G-Force System
+
+        /// <summary>
+        /// Creates a G-force tracking system for acceleration-based damage.
+        /// </summary>
+        public static GForceSystem CreateGForceSystem()
+        {
+            return new GForceSystem();
+        }
+
+        /// <summary>
+        /// Creates G-force limits for human passengers.
+        /// </summary>
+        public static GForceLimits HumanGForceLimits() => GForceLimits.Human();
+
+        /// <summary>
+        /// Creates G-force limits for trained pilots.
+        /// </summary>
+        public static GForceLimits PilotGForceLimits() => GForceLimits.Pilot();
+
+        /// <summary>
+        /// Creates G-force limits for aircraft structures.
+        /// </summary>
+        public static GForceLimits AircraftGForceLimits() => GForceLimits.Aircraft();
+
+        /// <summary>
+        /// Creates G-force limits for spacecraft.
+        /// </summary>
+        public static GForceLimits SpacecraftGForceLimits() => GForceLimits.Spacecraft();
+
+        /// <summary>
+        /// Creates G-force limits for fragile objects.
+        /// </summary>
+        public static GForceLimits FragileGForceLimits() => GForceLimits.Fragile();
+
+        #endregion
+
+        #region Orbital Mechanics
+
+        /// <summary>
+        /// Creates an orbital mechanics simulation.
+        /// </summary>
+        public static OrbitalMechanics CreateOrbitalMechanics()
+        {
+            return new OrbitalMechanics();
+        }
+
+        /// <summary>
+        /// Creates a celestial body with the given parameters.
+        /// </summary>
+        public static CelestialBody CreateCelestialBody(
+            string name, double mass, double radius, System.Numerics.Vector3 position)
+        {
+            return new CelestialBody
+            {
+                Name = name,
+                Mass = (float)mass,
+                Radius = (float)radius,
+                Position = position
+            };
+        }
+
+        /// <summary>
+        /// Creates an Earth celestial body.
+        /// </summary>
+        public static CelestialBody CreateEarth() => CelestialBody.Earth();
+
+        /// <summary>
+        /// Creates a Moon celestial body.
+        /// </summary>
+        public static CelestialBody CreateMoon() => CelestialBody.Moon();
+
+        /// <summary>
+        /// Creates a Sun celestial body.
+        /// </summary>
+        public static CelestialBody CreateSun() => CelestialBody.Sun();
+
+        /// <summary>
+        /// Creates a Mars celestial body.
+        /// </summary>
+        public static CelestialBody CreateMars() => CelestialBody.Mars();
+
+        #endregion
+
+        #region Propulsion System
+
+        /// <summary>
+        /// Creates a propulsion system for spacecraft simulation.
+        /// </summary>
+        public static PropulsionSystem CreatePropulsionSystem()
+        {
+            return new PropulsionSystem();
+        }
+
+        /// <summary>
+        /// Creates a Falcon 9 rocket configuration.
+        /// </summary>
+        public static Spacecraft CreateFalcon9() => Spacecraft.Falcon9();
+
+        /// <summary>
+        /// Creates a Saturn V rocket configuration.
+        /// </summary>
+        public static Spacecraft CreateSaturnV() => Spacecraft.SaturnV();
+
+        /// <summary>
+        /// Creates an ion propulsion probe.
+        /// </summary>
+        public static Spacecraft CreateIonProbe() => Spacecraft.IonProbe();
+
+        /// <summary>
+        /// Creates a Merlin 1D engine.
+        /// </summary>
+        public static Engine CreateMerlin1DEngine() => Engine.Merlin1D();
+
+        /// <summary>
+        /// Creates a Raptor engine.
+        /// </summary>
+        public static Engine CreateRaptorEngine() => Engine.Raptor();
+
+        /// <summary>
+        /// Creates an ion thruster.
+        /// </summary>
+        public static Engine CreateIonThruster() => Engine.IonThruster();
+
+        /// <summary>
+        /// Creates an RCS thruster.
+        /// </summary>
+        public static Engine CreateRCSThruster() => Engine.RCS();
+
+        #endregion
+
+        #region Planet Gravity
+
+        /// <summary>
+        /// Creates a planet gravity system for N-body simulation.
+        /// </summary>
+        public static PlanetGravitySystem CreatePlanetGravitySystem()
+        {
+            return new PlanetGravitySystem();
+        }
+
+        /// <summary>
+        /// Creates a gravitational body with the given parameters.
+        /// </summary>
+        public static GravitationalBody CreateGravitationalBody(
+            float mass, float radius, System.Numerics.Vector3 position)
+        {
+            return new GravitationalBody
+            {
+                Mass = mass,
+                Radius = radius,
+                Position = position
+            };
+        }
+
+        /// <summary>
+        /// Creates an Earth gravitational body.
+        /// </summary>
+        public static GravitationalBody CreateEarthGravity() => GravitationalBody.Earth();
+
+        /// <summary>
+        /// Creates a Moon gravitational body.
+        /// </summary>
+        public static GravitationalBody CreateMoonGravity() => GravitationalBody.Moon();
+
+        /// <summary>
+        /// Creates a game-scale planet with custom surface gravity.
+        /// </summary>
+        public static GravitationalBody CreateGamePlanet(float radius, float surfaceGravity = 9.81f)
+        {
+            return GravitationalBody.GamePlanet(radius, surfaceGravity);
+        }
+
+        /// <summary>
+        /// Creates a point gravity source for game mechanics (e.g., Mario Galaxy style).
+        /// </summary>
+        public static PointGravity CreatePointGravity(
+            System.Numerics.Vector3 center, float strength = 9.81f, float radius = 1f)
+        {
+            return new PointGravity
+            {
+                Center = center,
+                Strength = strength,
+                Radius = radius
+            };
+        }
+
+        /// <summary>
+        /// Creates a multi-point gravity system for levels with multiple planets.
+        /// </summary>
+        public static MultiPointGravity CreateMultiPointGravity()
+        {
+            return new MultiPointGravity();
+        }
+
+        #endregion
+
+        #region Slope Stability and Rockfall
+
+        /// <summary>
+        /// Creates a slope stability system for rockfall simulation.
+        /// </summary>
+        public static SlopeStabilitySystem CreateSlopeStabilitySystem()
+        {
+            return new SlopeStabilitySystem();
+        }
+
+        /// <summary>
+        /// Creates rock slope material.
+        /// </summary>
+        public static SlopeMaterial RockMaterial() => SlopeMaterial.Rock();
+
+        /// <summary>
+        /// Creates gravel slope material.
+        /// </summary>
+        public static SlopeMaterial GravelMaterial() => SlopeMaterial.Gravel();
+
+        /// <summary>
+        /// Creates sand slope material.
+        /// </summary>
+        public static SlopeMaterial SandMaterial() => SlopeMaterial.Sand();
+
+        /// <summary>
+        /// Creates clay slope material.
+        /// </summary>
+        public static SlopeMaterial ClayMaterial() => SlopeMaterial.Clay();
+
+        /// <summary>
+        /// Creates soil slope material.
+        /// </summary>
+        public static SlopeMaterial SoilMaterial() => SlopeMaterial.Soil();
+
+        /// <summary>
+        /// Creates ice slope material.
+        /// </summary>
+        public static SlopeMaterial IceMaterial() => SlopeMaterial.Ice();
+
+        /// <summary>
+        /// Creates snow slope material.
+        /// </summary>
+        public static SlopeMaterial SnowMaterial() => SlopeMaterial.Snow();
+
+        #endregion
+
+        #region State Transfer and Time Reversal
+
+        /// <summary>
+        /// Creates a state transfer system for bidirectional state management.
+        /// </summary>
+        public static StateTransferSystem CreateStateTransfer()
+        {
+            return new StateTransferSystem();
+        }
+
+        /// <summary>
+        /// Creates a simulation recorder for precomputation and playback.
+        /// </summary>
+        public static SimulationRecorder CreateSimulationRecorder()
+        {
+            return new SimulationRecorder();
+        }
+
+        #endregion
     }
 }
