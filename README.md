@@ -20,6 +20,36 @@ Gioco demo che dimostra le capacità del motore Artemis:
 - **Sistema di Danno**: I blocchi si danneggiano in base all'impatto
 - **Tre Livelli**: Strutture diverse da abbattere
 
+### AdvancedPhysicsDemo
+Demo interattivo che mostra le funzionalità avanzate del motore Artemis:
+
+**5 Scene Interattive:**
+
+1. **Ragdoll Physics** - Sistema di ragdoll con articolazioni
+   - RevoluteJoint e DistanceJoint per braccia e gambe
+   - Fisica realistica del corpo umano
+   - Spawn multipli di ragdoll
+
+2. **Vehicle with Suspension** - Veicolo con sospensioni
+   - SpringJoint per ammortizzatori realistici
+   - Controllo accelerazione e salto
+   - Terreno irregolare con ostacoli
+
+3. **Chains & Bridges** - Catene e ponti sospesi
+   - DistanceJoint per catene metalliche
+   - RopeJoint per ponti flessibili
+   - Fisica realistica della tensione
+
+4. **Raycast Shooting** - Sistema di raycasting
+   - Visualizzazione raggi in tempo reale
+   - Layer mask filtering
+   - Applicazione impulsi ai punti di impatto
+
+5. **Trigger Zones & Events** - Zone trigger ed eventi
+   - Collision events (OnEnter, OnStay, OnExit)
+   - Trigger zones senza fisica
+   - Monitoraggio eventi in tempo reale
+
 ## Controlli
 
 - **W/S**: Regola l'angolo di lancio (su/giù)
@@ -32,11 +62,14 @@ Gioco demo che dimostra le capacità del motore Artemis:
 ## Come Compilare ed Eseguire
 
 ```bash
-# Compila il progetto
-dotnet build PhysicsCatapultDemo/PhysicsCatapultDemo.csproj
+# Compila l'intera solution
+dotnet build Artemis.sln
 
-# Esegui il gioco
+# Esegui Physics Catapult Demo
 dotnet run --project PhysicsCatapultDemo/PhysicsCatapultDemo.csproj
+
+# Esegui Advanced Physics Demo
+dotnet run --project AdvancedPhysicsDemo/AdvancedPhysicsDemo.csproj
 ```
 
 ## Caratteristiche del Motore Artemis
@@ -107,13 +140,20 @@ Il progetto è diviso in due componenti principali:
    - `Joints.cs`: Constraints e collegamenti tra corpi
    - `SpatialPartitioning.cs`: Spatial hash grid e quadtree
 
-2. **PhysicsCatapultDemo**: Applicazione di gioco
+2. **PhysicsCatapultDemo**: Gioco dimostrativo
    - `Material.cs`: Definizione dei materiali
    - `GameObject.cs`: Oggetti di gioco con salute
    - `Catapult.cs`: Sistema di lancio
    - `LevelBuilder.cs`: Costruttore di livelli
    - `Renderer.cs`: Sistema di rendering ASCII
    - `Program.cs`: Game loop principale
+
+3. **AdvancedPhysicsDemo**: Demo funzionalità avanzate
+   - `RagdollBuilder.cs`: Creazione ragdoll con joints
+   - `VehicleBuilder.cs`: Veicolo con sospensioni
+   - `ChainBuilder.cs`: Catene e ponti sospesi
+   - `AdvancedRenderer.cs`: Rendering con visualizzazione joints e raycast
+   - `Program.cs`: 5 scene interattive
 
 ## Esempi di Utilizzo
 
