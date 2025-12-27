@@ -290,7 +290,7 @@ namespace Artemis.Forces
             // Check for amplification/dampening based on alignment
             if (rule.Amplify || rule.Dampen)
             {
-                double dot = Vector3D.Dot(a.Normalized(), b.Normalized());
+                double dot = Vector3D.Dot(a.Normalized, b.Normalized);
 
                 if (rule.Amplify && dot > 0.5) // Aligned forces amplify
                 {
@@ -322,7 +322,7 @@ namespace Artemis.Forces
 
                 case ForceBlendMode.Interference:
                     // Forces that oppose cancel out
-                    double alignment = Vector3D.Dot(a.Normalized(), b.Normalized());
+                    double alignment = Vector3D.Dot(a.Normalized, b.Normalized);
                     if (alignment < 0)
                     {
                         double cancellation = Math.Abs(alignment);
@@ -514,7 +514,7 @@ namespace Artemis.Forces
 
                     if (rule != null && (rule.Amplify || rule.Dampen))
                     {
-                        double dot = Vector3D.Dot(vecA.Normalized(), vecB.Normalized());
+                        double dot = Vector3D.Dot(vecA.Normalized, vecB.Normalized);
 
                         if (rule.Amplify && dot > 0.5)
                         {

@@ -8,7 +8,7 @@ namespace Artemis.Particles
     /// Represents a single particle in a particle system.
     /// Optimized for mass simulations with minimal overhead.
     /// </summary>
-    public struct Particle
+    public struct Particle : IEquatable<Particle>
     {
         /// <summary>Position in world space.</summary>
         public Vector3D Position;
@@ -42,6 +42,24 @@ namespace Artemis.Particles
 
         /// <summary>Whether the particle is alive.</summary>
         public bool IsAlive;
+
+        /// <summary>
+        /// Gets or sets whether the particle is active (alias for IsAlive).
+        /// </summary>
+        public bool IsActive
+        {
+            readonly get => IsAlive;
+            set => IsAlive = value;
+        }
+
+        /// <summary>
+        /// Gets or sets the particle size (alias for Radius).
+        /// </summary>
+        public double Size
+        {
+            readonly get => Radius;
+            set => Radius = value;
+        }
 
         /// <summary>Custom user data index.</summary>
         public int UserData;
@@ -169,6 +187,49 @@ namespace Artemis.Particles
             IsAlive = false;
             Lifetime = 0;
         }
+
+        public readonly bool Equals(Particle other)
+        {
+            return Position.Equals(other.Position) &&
+                   PreviousPosition.Equals(other.PreviousPosition) &&
+                   Velocity.Equals(other.Velocity) &&
+                   Force.Equals(other.Force) &&
+                   Mass.Equals(other.Mass) &&
+                   InverseMass.Equals(other.InverseMass) &&
+                   Radius.Equals(other.Radius) &&
+                   Lifetime.Equals(other.Lifetime) &&
+                   InitialLifetime.Equals(other.InitialLifetime) &&
+                   Color == other.Color &&
+                   IsAlive == other.IsAlive &&
+                   UserData == other.UserData &&
+                   Flags == other.Flags;
+        }
+
+        public override readonly bool Equals(object? obj)
+            => obj is Particle other && Equals(other);
+
+        public override readonly int GetHashCode()
+        {
+            var hash = new HashCode();
+            hash.Add(Position);
+            hash.Add(PreviousPosition);
+            hash.Add(Velocity);
+            hash.Add(Force);
+            hash.Add(Mass);
+            hash.Add(InverseMass);
+            hash.Add(Radius);
+            hash.Add(Lifetime);
+            hash.Add(InitialLifetime);
+            hash.Add(Color);
+            hash.Add(IsAlive);
+            hash.Add(UserData);
+            hash.Add(Flags);
+            return hash.ToHashCode();
+        }
+
+        public static bool operator ==(Particle left, Particle right) => left.Equals(right);
+
+        public static bool operator !=(Particle left, Particle right) => !left.Equals(right);
     }
 
     /// <summary>

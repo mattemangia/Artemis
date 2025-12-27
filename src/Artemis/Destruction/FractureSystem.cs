@@ -209,7 +209,7 @@ namespace Artemis.Destruction
             {
                 OriginalBody = body,
                 ImpactPoint = impactPoint,
-                ImpactDirection = impactDirection.Normalized(),
+                ImpactDirection = impactDirection.Normalized,
                 CascadeDepth = _currentCascadeDepth
             };
 
@@ -249,7 +249,7 @@ namespace Artemis.Destruction
                     fragment.AngularVelocity = body.AngularVelocity;
 
                     // Add explosion velocity from impact point
-                    var toFragment = (fragment.Position - impactPoint).Normalized();
+                    var toFragment = (fragment.Position - impactPoint).Normalized;
                     var explosionVel = toFragment * force * config.FragmentVelocityScale * 0.01;
                     fragment.Velocity += explosionVel;
 
@@ -573,8 +573,8 @@ namespace Artemis.Destruction
                     _random.NextDouble() * 2 - 1,
                     _random.NextDouble() * 2 - 1,
                     _random.NextDouble() * 2 - 1
-                ).Normalized();
-                dir = (dir + impactDir * 0.5).Normalized();
+                ).Normalized;
+                dir = (dir + impactDir * 0.5).Normalized;
 
                 var velocity = dir * force * 0.02 * (0.5 + _random.NextDouble());
 
@@ -585,7 +585,7 @@ namespace Artemis.Destruction
                     Size = 0.02 + _random.NextDouble() * 0.05,
                     Mass = 0.01,
                     Lifetime = 2.0 + _random.NextDouble() * 3.0,
-                    Color = body.Material?.Color ?? new Color(0.5, 0.5, 0.5)
+                    Color = body.Material?.Color ?? 0xFF808080
                 };
 
                 result.Debris.Add(debris);
@@ -775,7 +775,7 @@ namespace Artemis.Destruction
                             Size = particleSize,
                             Mass = particleSize * particleSize * particleSize * 2000,
                             Lifetime = double.MaxValue,
-                            Color = new Color(0.76, 0.7, 0.5) // Sand color
+                            Color = 0xFFC2B280 // Sand color
                         });
                     }
                 }
@@ -815,7 +815,7 @@ namespace Artemis.Destruction
                                 Size = particleSize,
                                 Mass = particleSize * particleSize * particleSize * 2000,
                                 Lifetime = double.MaxValue,
-                                Color = new Color(0.76, 0.7, 0.5)
+                                Color = 0xFFC2B280
                             });
                         }
                     }
@@ -835,7 +835,7 @@ namespace Artemis.Destruction
         public List<Particle> ApplyWind(Vector3D windDirection, double windStrength, double deltaTime)
         {
             var erodedParticles = new List<Particle>();
-            windDirection = windDirection.Normalized();
+            windDirection = windDirection.Normalized;
 
             for (int i = _particles.Count - 1; i >= 0; i--)
             {
@@ -889,7 +889,7 @@ namespace Artemis.Destruction
                     {
                         _particles.RemoveAt(i);
 
-                        var direction = toParticle.Normalized();
+                        var direction = toParticle.Normalized;
                         p.Velocity = direction * impactForce * forceFactor * 0.1;
                         p.Lifetime = 3 + Random.Shared.NextDouble() * 3;
                         erodedParticles.Add(p);

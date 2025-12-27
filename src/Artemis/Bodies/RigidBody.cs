@@ -36,6 +36,15 @@ namespace Artemis.Bodies
         /// <inheritdoc/>
         public BodyType BodyType { get; set; } = BodyType.Dynamic;
 
+        /// <summary>
+        /// Gets or sets whether the body is static (alias for BodyType).
+        /// </summary>
+        public bool IsStatic
+        {
+            get => BodyType == BodyType.Static;
+            set => BodyType = value ? BodyType.Static : BodyType.Dynamic;
+        }
+
         /// <inheritdoc/>
         public bool IsActive { get; set; } = true;
 
@@ -152,6 +161,25 @@ namespace Artemis.Bodies
         /// Gets the inverse inertia tensor in world space.
         /// </summary>
         public Matrix3x3 WorldInverseInertiaTensor => _worldInverseInertiaTensor;
+
+        /// <summary>
+        /// Gets the inverse inertia tensor in world space (alias).
+        /// </summary>
+        public Matrix3x3 InverseInertiaTensorWorld => _worldInverseInertiaTensor;
+
+        /// <summary>
+        /// Gets the angular acceleration derived from accumulated torque.
+        /// </summary>
+        public Vector3D AngularAcceleration => _worldInverseInertiaTensor * _accumulatedTorque;
+
+        /// <summary>
+        /// Gets or sets the sleep timer (seconds).
+        /// </summary>
+        public double SleepTimer
+        {
+            get => _sleepTimer;
+            set => _sleepTimer = value;
+        }
 
         /// <summary>
         /// Gets or sets the half-extents (for box collision shape).
@@ -334,6 +362,16 @@ namespace Artemis.Bodies
         {
             IsSleeping = false;
             _sleepTimer = 0;
+        }
+
+        /// <summary>
+        /// Puts the body to sleep and clears velocities.
+        /// </summary>
+        public void Sleep()
+        {
+            IsSleeping = true;
+            _velocity = Vector3D.Zero;
+            _angularVelocity = Vector3D.Zero;
         }
 
         /// <inheritdoc/>

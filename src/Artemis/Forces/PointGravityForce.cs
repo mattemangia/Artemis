@@ -106,8 +106,8 @@ namespace Artemis.Forces
                     double smoothFactor = t * t * (3 - 2 * t);
 
                     var direction = displacement / distance;
-                    double forceMagnitude = GravitationalConstant * Mass * mass / distanceSquared;
-                    return direction * forceMagnitude * smoothFactor;
+                    double softForceMagnitude = GravitationalConstant * Mass * mass / distanceSquared;
+                    return direction * softForceMagnitude * smoothFactor;
                 }
                 else
                 {

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -636,8 +637,8 @@ namespace Artemis.Simulation
                 tangent /= tangentLen;
 
                 double friction = Math.Sqrt(
-                    (bodyA?.Material.Friction ?? 0.5) *
-                    (bodyB?.Material.Friction ?? 0.5)
+                    (bodyA?.Material.DynamicFriction ?? 0.5) *
+                    (bodyB?.Material.DynamicFriction ?? 0.5)
                 );
 
                 double jt = -Vector3D.Dot(relVel, tangent) / kNormal;
@@ -666,7 +667,7 @@ namespace Artemis.Simulation
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void SolvePositionConstraint(CollisionInfo collision)
         {
-            if (collision.PenetrationDepth < 0.001)
+            if (collision.Penetration < 0.001)
                 return;
 
             var bodyA = collision.BodyA as RigidBody;
@@ -681,7 +682,7 @@ namespace Artemis.Simulation
             const double baumgarte = 0.2;
             const double slop = 0.005;
 
-            double correction = baumgarte * Math.Max(collision.PenetrationDepth - slop, 0) /
+            double correction = baumgarte * Math.Max(collision.Penetration - slop, 0) /
                                (invMassA + invMassB);
 
             var correctionVec = collision.Normal * correction;
@@ -711,7 +712,7 @@ namespace Artemis.Simulation
                     // Quaternion integration for rotation
                     var w = new Quaternion(0, rb.AngularVelocity.X, rb.AngularVelocity.Y, rb.AngularVelocity.Z);
                     var qDot = 0.5 * w * rb.Rotation;
-                    rb.Rotation = (rb.Rotation + qDot * dt).Normalized();
+                    rb.Rotation = (rb.Rotation + qDot * dt).Normalized;
 
                     // Clear forces
                     rb.ClearForces();
@@ -776,7 +777,7 @@ namespace Artemis.Simulation
                 body.BoundingBox.Min + displacement,
                 body.BoundingBox.Max + displacement
             );
-            sweepAABB = AABB.Union(sweepAABB, endAABB);
+            sweepAABB = sweepAABB.Union(endAABB);
 
             // Query spatial hash for potential hits
             var candidates = _spatialHash.Query(sweepAABB);
@@ -848,7 +849,7 @@ namespace Artemis.Simulation
         /// </summary>
         public RaycastHit? Raycast(Vector3D origin, Vector3D direction, double maxDistance = 1000)
         {
-            direction = direction.Normalized();
+            direction = direction.Normalized;
             RaycastHit? closest = null;
             double closestDist = maxDistance;
 
@@ -971,42 +972,4 @@ namespace Artemis.Simulation
         #endregion
     }
 
-    // Thread-safe bag for parallel collection
-    internal class ConcurrentBag<T>
-    {
-        private readonly List<T>[] _buckets;
-        private readonly object[] _locks;
-
-        public ConcurrentBag()
-        {
-            int count = Environment.ProcessorCount;
-            _buckets = new List<T>[count];
-            _locks = new object[count];
-            for (int i = 0; i < count; i++)
-            {
-                _buckets[i] = new List<T>();
-                _locks[i] = new object();
-            }
-        }
-
-        public void Add(T item)
-        {
-            int bucket = Thread.CurrentThread.ManagedThreadId % _buckets.Length;
-            lock (_locks[bucket])
-            {
-                _buckets[bucket].Add(item);
-            }
-        }
-
-        public IEnumerator<T> GetEnumerator()
-        {
-            foreach (var bucket in _buckets)
-            {
-                foreach (var item in bucket)
-                {
-                    yield return item;
-                }
-            }
-        }
-    }
 }

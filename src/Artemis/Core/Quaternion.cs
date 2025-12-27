@@ -69,6 +69,7 @@ namespace Artemis.Core
             }
         }
 
+
         /// <summary>
         /// Gets the conjugate of this quaternion.
         /// </summary>
@@ -239,6 +240,26 @@ namespace Artemis.Core
                 a.W * b.Z + a.X * b.Y - a.Y * b.X + a.Z * b.W,
                 a.W * b.W - a.X * b.X - a.Y * b.Y - a.Z * b.Z
             );
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Quaternion operator +(Quaternion a, Quaternion b)
+            => new(a.X + b.X, a.Y + b.Y, a.Z + b.Z, a.W + b.W);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Quaternion operator -(Quaternion a, Quaternion b)
+            => new(a.X - b.X, a.Y - b.Y, a.Z - b.Z, a.W - b.W);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Quaternion operator *(Quaternion q, double scalar)
+            => new(q.X * scalar, q.Y * scalar, q.Z * scalar, q.W * scalar);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Quaternion operator *(double scalar, Quaternion q)
+            => q * scalar;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Quaternion operator /(Quaternion q, double scalar)
+            => new(q.X / scalar, q.Y / scalar, q.Z / scalar, q.W / scalar);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vector3D operator *(Quaternion q, Vector3D v)

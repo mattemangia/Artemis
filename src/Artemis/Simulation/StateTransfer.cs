@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
-using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Artemis.Core;
@@ -18,7 +17,7 @@ namespace Artemis.Simulation
         public float Time { get; set; }
         public string Name { get; set; } = "State";
         public List<RigidBodyState> Bodies { get; set; } = new();
-        public List<ParticleState> Particles { get; set; } = new();
+        public List<ParticleSnapshot> Particles { get; set; } = new();
         public Dictionary<string, object> CustomData { get; set; } = new();
         public StateMetadata Metadata { get; set; } = new();
     }
@@ -42,45 +41,45 @@ namespace Artemis.Simulation
         public Vector3Serializable Velocity { get; set; }
         public Vector3Serializable AngularVelocity { get; set; }
         public QuaternionSerializable Rotation { get; set; }
-        public float Mass { get; set; }
+        public double Mass { get; set; }
         public bool IsStatic { get; set; }
         public bool IsActive { get; set; } = true;
         public Dictionary<string, float> Properties { get; set; } = new();
     }
 
-    public class ParticleState
+    public class ParticleSnapshot
     {
         public Vector3Serializable Position { get; set; }
         public Vector3Serializable Velocity { get; set; }
-        public float Mass { get; set; }
-        public float Life { get; set; }
-        public bool IsActive { get; set; }
+        public double Mass { get; set; }
+        public double Lifetime { get; set; }
+        public bool IsAlive { get; set; }
         public int Type { get; set; }
     }
 
-    // JSON-serializable Vector3
+    // JSON-serializable Vector3D
     public struct Vector3Serializable
     {
-        public float X { get; set; }
-        public float Y { get; set; }
-        public float Z { get; set; }
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double Z { get; set; }
 
-        public Vector3Serializable(float x, float y, float z) { X = x; Y = y; Z = z; }
-        public Vector3Serializable(Vector3 v) { X = v.X; Y = v.Y; Z = v.Z; }
-        public Vector3 ToVector3() => new(X, Y, Z);
-        public static implicit operator Vector3Serializable(Vector3 v) => new(v);
-        public static implicit operator Vector3(Vector3Serializable v) => v.ToVector3();
+        public Vector3Serializable(double x, double y, double z) { X = x; Y = y; Z = z; }
+        public Vector3Serializable(Vector3D v) { X = v.X; Y = v.Y; Z = v.Z; }
+        public Vector3D ToVector3D() => new(X, Y, Z);
+        public static implicit operator Vector3Serializable(Vector3D v) => new(v);
+        public static implicit operator Vector3D(Vector3Serializable v) => v.ToVector3D();
     }
 
     // JSON-serializable Quaternion
     public struct QuaternionSerializable
     {
-        public float X { get; set; }
-        public float Y { get; set; }
-        public float Z { get; set; }
-        public float W { get; set; }
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double Z { get; set; }
+        public double W { get; set; }
 
-        public QuaternionSerializable(float x, float y, float z, float w) { X = x; Y = y; Z = z; W = w; }
+        public QuaternionSerializable(double x, double y, double z, double w) { X = x; Y = y; Z = z; W = w; }
         public QuaternionSerializable(Quaternion q) { X = q.X; Y = q.Y; Z = q.Z; W = q.W; }
         public Quaternion ToQuaternion() => new(X, Y, Z, W);
         public static implicit operator QuaternionSerializable(Quaternion q) => new(q);
@@ -130,10 +129,10 @@ namespace Artemis.Simulation
                     Position = body.Position,
                     Velocity = body.Velocity,
                     AngularVelocity = body.AngularVelocity,
-                    Rotation = body.Orientation,
+                    Rotation = body.Rotation,
                     Mass = body.Mass,
-                    IsStatic = body.IsStatic,
-                    IsActive = true
+                    IsStatic = body.BodyType == BodyType.Static,
+                    IsActive = body.IsActive
                 });
             }
 
@@ -153,15 +152,15 @@ namespace Artemis.Simulation
 
             foreach (ref readonly var particle in particles)
             {
-                if (!particle.IsActive) continue;
+                if (!particle.IsAlive) continue;
 
-                state.Particles.Add(new ParticleState
+                state.Particles.Add(new ParticleSnapshot
                 {
                     Position = particle.Position,
                     Velocity = particle.Velocity,
                     Mass = particle.Mass,
-                    Life = particle.Life,
-                    IsActive = true
+                    Lifetime = particle.Lifetime,
+                    IsAlive = true
                 });
             }
 
@@ -176,15 +175,15 @@ namespace Artemis.Simulation
             var state = CaptureState(bodies, time, name);
             foreach (ref readonly var particle in particles)
             {
-                if (!particle.IsActive) continue;
+                if (!particle.IsAlive) continue;
 
-                state.Particles.Add(new ParticleState
+                state.Particles.Add(new ParticleSnapshot
                 {
                     Position = particle.Position,
                     Velocity = particle.Velocity,
                     Mass = particle.Mass,
-                    Life = particle.Life,
-                    IsActive = true
+                    Lifetime = particle.Lifetime,
+                    IsAlive = true
                 });
             }
             return state;
@@ -209,9 +208,10 @@ namespace Artemis.Simulation
                 body.Position = bs.Position;
                 body.Velocity = bs.Velocity;
                 body.AngularVelocity = bs.AngularVelocity;
-                body.Orientation = bs.Rotation;
+                body.Rotation = bs.Rotation;
                 body.Mass = bs.Mass;
-                body.IsStatic = bs.IsStatic;
+                body.BodyType = bs.IsStatic ? BodyType.Static : BodyType.Dynamic;
+                body.IsActive = bs.IsActive;
             }
         }
 
@@ -229,8 +229,9 @@ namespace Artemis.Simulation
                     Position = ps.Position,
                     Velocity = ps.Velocity,
                     Mass = ps.Mass,
-                    Life = ps.Life,
-                    IsActive = ps.IsActive
+                    Lifetime = ps.Lifetime,
+                    InitialLifetime = ps.Lifetime,
+                    IsAlive = ps.IsAlive
                 };
             }
         }
@@ -271,13 +272,13 @@ namespace Artemis.Simulation
 
             foreach (var ps in state.Particles)
             {
-                reversed.Particles.Add(new ParticleState
+                reversed.Particles.Add(new ParticleSnapshot
                 {
                     Position = ps.Position,
                     Velocity = new Vector3Serializable(-ps.Velocity.X, -ps.Velocity.Y, -ps.Velocity.Z),
                     Mass = ps.Mass,
-                    Life = ps.Life,
-                    IsActive = ps.IsActive,
+                    Lifetime = ps.Lifetime,
+                    IsAlive = ps.IsAlive,
                     Type = ps.Type
                 });
             }
@@ -388,9 +389,9 @@ namespace Artemis.Simulation
                 {
                     Id = a.Id,
                     Name = a.Name,
-                    Position = Vector3.Lerp(a.Position, b.Position, t),
-                    Velocity = Vector3.Lerp(a.Velocity, b.Velocity, t),
-                    AngularVelocity = Vector3.Lerp(a.AngularVelocity, b.AngularVelocity, t),
+                    Position = Vector3D.Lerp(a.Position, b.Position, t),
+                    Velocity = Vector3D.Lerp(a.Velocity, b.Velocity, t),
+                    AngularVelocity = Vector3D.Lerp(a.AngularVelocity, b.AngularVelocity, t),
                     Rotation = Quaternion.Slerp(a.Rotation, b.Rotation, t),
                     Mass = a.Mass + (b.Mass - a.Mass) * t,
                     IsStatic = a.IsStatic,
@@ -404,13 +405,13 @@ namespace Artemis.Simulation
                 var a = stateA.Particles[i];
                 var b = stateB.Particles[i];
 
-                result.Particles.Add(new ParticleState
+                result.Particles.Add(new ParticleSnapshot
                 {
-                    Position = Vector3.Lerp(a.Position, b.Position, t),
-                    Velocity = Vector3.Lerp(a.Velocity, b.Velocity, t),
+                    Position = Vector3D.Lerp(a.Position, b.Position, t),
+                    Velocity = Vector3D.Lerp(a.Velocity, b.Velocity, t),
                     Mass = a.Mass + (b.Mass - a.Mass) * t,
-                    Life = a.Life + (b.Life - a.Life) * t,
-                    IsActive = a.IsActive || b.IsActive
+                    Lifetime = a.Lifetime + (b.Lifetime - a.Lifetime) * t,
+                    IsAlive = a.IsAlive || b.IsAlive
                 });
             }
 
@@ -528,180 +529,4 @@ namespace Artemis.Simulation
         }
     }
 
-    /// <summary>
-    /// Manages precomputed simulation sequences with bidirectional playback
-    /// </summary>
-    public class SimulationRecorder
-    {
-        private readonly List<PhysicsState> _recording = new();
-        private bool _isRecording;
-        private float _recordInterval = 0.02f;
-        private float _timeSinceLastRecord;
-
-        public bool IsRecording => _isRecording;
-        public int FrameCount => _recording.Count;
-        public float Duration => _recording.Count > 0 ? _recording[^1].Time : 0;
-        public PhysicsState? InitialState => _recording.Count > 0 ? _recording[0] : null;
-        public PhysicsState? FinalState => _recording.Count > 0 ? _recording[^1] : null;
-
-        public float RecordInterval
-        {
-            get => _recordInterval;
-            set => _recordInterval = MathF.Max(0.001f, value);
-        }
-
-        /// <summary>
-        /// Start recording
-        /// </summary>
-        public void StartRecording()
-        {
-            _recording.Clear();
-            _isRecording = true;
-            _timeSinceLastRecord = _recordInterval;  // Record first frame immediately
-        }
-
-        /// <summary>
-        /// Stop recording
-        /// </summary>
-        public void StopRecording()
-        {
-            _isRecording = false;
-
-            if (_recording.Count > 0)
-            {
-                _recording[0].Metadata.IsInitialState = true;
-                _recording[^1].Metadata.IsFinalState = true;
-            }
-        }
-
-        /// <summary>
-        /// Record a frame if interval has passed
-        /// </summary>
-        public void RecordFrame(PhysicsState state, float deltaTime)
-        {
-            if (!_isRecording) return;
-
-            _timeSinceLastRecord += deltaTime;
-
-            if (_timeSinceLastRecord >= _recordInterval)
-            {
-                _recording.Add(state);
-                _timeSinceLastRecord = 0;
-            }
-        }
-
-        /// <summary>
-        /// Get frame at specific time
-        /// </summary>
-        public PhysicsState? GetFrameAtTime(float time)
-        {
-            if (_recording.Count == 0) return null;
-
-            // Find surrounding frames
-            int index = 0;
-            for (int i = 0; i < _recording.Count - 1; i++)
-            {
-                if (_recording[i + 1].Time > time)
-                {
-                    index = i;
-                    break;
-                }
-                index = i;
-            }
-
-            return _recording[index];
-        }
-
-        /// <summary>
-        /// Get interpolated frame at specific time
-        /// </summary>
-        public PhysicsState? GetInterpolatedFrame(float time, StateTransferSystem transferSystem)
-        {
-            if (_recording.Count < 2) return GetFrameAtTime(time);
-
-            // Find surrounding frames
-            int indexA = 0;
-            for (int i = 0; i < _recording.Count - 1; i++)
-            {
-                if (_recording[i + 1].Time > time)
-                {
-                    indexA = i;
-                    break;
-                }
-                indexA = i;
-            }
-
-            int indexB = Math.Min(indexA + 1, _recording.Count - 1);
-            if (indexA == indexB) return _recording[indexA];
-
-            float t = (time - _recording[indexA].Time) / (_recording[indexB].Time - _recording[indexA].Time);
-            return transferSystem.Interpolate(_recording[indexA], _recording[indexB], t);
-        }
-
-        /// <summary>
-        /// Playback from final state to initial state (time reversal)
-        /// </summary>
-        public IEnumerable<PhysicsState> PlaybackReverse(StateTransferSystem transferSystem)
-        {
-            for (int i = _recording.Count - 1; i >= 0; i--)
-            {
-                yield return transferSystem.CreateReversedState(_recording[i]);
-            }
-        }
-
-        /// <summary>
-        /// Create initial state from final state (useful for reverse simulations)
-        /// </summary>
-        public PhysicsState? CreateInitialFromFinal(StateTransferSystem transferSystem, bool reverseVelocities = true)
-        {
-            if (FinalState == null) return null;
-            return transferSystem.FinalToInitial(FinalState, reverseVelocities);
-        }
-
-        /// <summary>
-        /// Save recording to file
-        /// </summary>
-        public void SaveRecording(string filePath)
-        {
-            var data = new { Frames = _recording };
-            var json = JsonSerializer.Serialize(data);
-
-            using var fileStream = File.Create(filePath);
-            using var gzipStream = new GZipStream(fileStream, CompressionLevel.Optimal);
-            using var writer = new StreamWriter(gzipStream);
-            writer.Write(json);
-        }
-
-        /// <summary>
-        /// Load recording from file
-        /// </summary>
-        public void LoadRecording(string filePath)
-        {
-            using var fileStream = File.OpenRead(filePath);
-            using var gzipStream = new GZipStream(fileStream, CompressionMode.Decompress);
-            using var reader = new StreamReader(gzipStream);
-            var json = reader.ReadToEnd();
-
-            var data = JsonSerializer.Deserialize<Dictionary<string, List<PhysicsState>>>(json);
-            if (data != null && data.ContainsKey("Frames"))
-            {
-                _recording.Clear();
-                _recording.AddRange(data["Frames"]);
-            }
-        }
-
-        /// <summary>
-        /// Get all recorded frames
-        /// </summary>
-        public IReadOnlyList<PhysicsState> GetAllFrames() => _recording;
-
-        /// <summary>
-        /// Clear recording
-        /// </summary>
-        public void Clear()
-        {
-            _recording.Clear();
-            _isRecording = false;
-        }
-    }
 }
