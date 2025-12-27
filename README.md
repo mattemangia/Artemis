@@ -30,6 +30,7 @@
 - **Force Interaction**: Forces combine, amplify, dampen, or cancel each other
 - **Ray Tracing**: GPU-accelerated mirror reflections, glass refraction, PBR materials
 - **Ballistics**: Bullet kinematics, trajectory with drag/wind, firing solutions, range tables
+- **2D Physics**: Complete 2D physics engine with circles, boxes, polygons, joints
 - **High Performance**: SIMD, multithreading, parallel processing, SoA data layouts
 - **Fluent API**: Intuitive, chainable configuration
 - **Extensible**: Easy to add custom forces, bodies, and behaviors
@@ -2672,6 +2673,286 @@ void Shoot(Vector3D origin, Vector3D direction)
 
 ---
 
+## 2D Physics
+
+Artemis includes a complete 2D physics engine for platformers, puzzle games, and mobile games.
+
+### 2D Physics World
+
+```csharp
+using Artemis;
+
+// Create a 2D physics world
+var world = Physics.CreateWorld2D();
+
+// Or with specific settings
+var platformerWorld = Physics.CreatePlatformerWorld2D();  // Stronger gravity
+var spaceWorld = Physics.CreateZeroGWorld2D();            // Zero gravity
+```
+
+### 2D Bodies
+
+```csharp
+// Dynamic circle (ball)
+var ball = Physics.CreateCircle2D(
+    position: new Vector2D(5, 10),
+    radius: 0.5,
+    density: 1.0
+);
+
+// Dynamic box
+var crate = Physics.CreateBox2D(
+    position: new Vector2D(0, 5),
+    width: 1.0,
+    height: 1.0,
+    density: 1.0
+);
+
+// Static platform
+var platform = Physics.CreateStaticBox2D(
+    position: new Vector2D(0, 0),
+    width: 20.0,
+    height: 1.0
+);
+
+// Edge (line segment) for terrain
+var ground = Physics.CreateEdge2D(
+    start: new Vector2D(-10, 0),
+    end: new Vector2D(10, 0)
+);
+
+// Chain of edges (terrain outline)
+var terrain = Physics.CreateChain2D(new[]
+{
+    new Vector2D(-10, 0),
+    new Vector2D(-5, 2),
+    new Vector2D(0, 1),
+    new Vector2D(5, 3),
+    new Vector2D(10, 0)
+}, loop: false);
+
+// Add bodies to world
+world.AddBody(ball);
+world.AddBody(platform);
+
+// Simulate
+while (running)
+{
+    world.Step(1.0 / 60.0);  // 60 FPS
+    Console.WriteLine($"Ball: {ball.Position}");
+}
+```
+
+### 2D Shapes
+
+```csharp
+// Circle shape
+var circle = Physics.CreateCircleShape(radius: 0.5);
+
+// Box shape
+var box = Physics.CreateBoxShape(width: 2.0, height: 1.0);
+
+// Regular polygon (hexagon, octagon, etc.)
+var hexagon = Physics.CreateRegularPolygon(sides: 6, radius: 1.0);
+
+// Triangle
+var triangle = Physics.CreateTriangleShape(
+    a: new Vector2D(0, 1),
+    b: new Vector2D(-1, -1),
+    c: new Vector2D(1, -1)
+);
+
+// Capsule (for characters)
+var capsule = Physics.CreateCapsuleShape(
+    halfLength: 0.5,
+    radius: 0.3,
+    vertical: true
+);
+
+// Custom polygon
+var custom = Physics.CreatePolygonShape(new[]
+{
+    new Vector2D(-1, 0),
+    new Vector2D(-0.5, 1),
+    new Vector2D(0.5, 1),
+    new Vector2D(1, 0),
+    new Vector2D(0, -1)
+});
+```
+
+### 2D Joints
+
+```csharp
+// Distance joint (fixed length rod)
+var distanceJoint = Physics.CreateDistanceJoint2D(
+    bodyA: platform,
+    bodyB: ball,
+    anchorA: platform.Position,
+    anchorB: ball.Position
+);
+world.AddJoint(distanceJoint);
+
+// Spring joint (soft distance)
+var spring = Physics.CreateSpringJoint2D(
+    bodyA: ceiling,
+    bodyB: weight,
+    anchorA: ceiling.Position,
+    anchorB: weight.Position,
+    frequency: 4.0,    // Oscillation Hz
+    damping: 0.5       // 0-1
+);
+
+// Revolute joint (hinge/pivot)
+var hinge = Physics.CreateRevoluteJoint2D(
+    bodyA: wall,
+    bodyB: door,
+    anchor: doorHingePosition
+);
+
+// Motor joint (rotating)
+var motor = Physics.CreateMotorJoint2D(
+    bodyA: chassis,
+    bodyB: wheel,
+    anchor: wheelPosition,
+    motorSpeed: 10.0,     // Rad/s
+    maxTorque: 1000.0
+);
+
+// Weld joint (rigidly connect)
+var weld = Physics.CreateWeldJoint2D(
+    bodyA: bodyA,
+    bodyB: bodyB,
+    anchor: connectionPoint
+);
+
+// Rope joint (max distance)
+var rope = Physics.CreateRopeJoint2D(
+    bodyA: anchor,
+    bodyB: weight,
+    anchorA: anchor.Position,
+    anchorB: weight.Position,
+    maxLength: 5.0
+);
+
+// Mouse joint (dragging)
+var mouseJoint = Physics.CreateMouseJoint2D(body, mousePosition);
+mouseJoint.Target = newMousePosition;  // Update target
+
+// Prismatic joint (slider)
+var slider = Physics.CreatePrismaticJoint2D(
+    bodyA: track,
+    bodyB: cart,
+    anchor: cart.Position,
+    axis: new Vector2D(1, 0)  // Slide along X
+);
+```
+
+### 2D Body Properties
+
+```csharp
+var body = Physics.CreateCircle2D(position, radius);
+
+// Movement
+body.Position = new Vector2D(5, 10);
+body.Rotation = Math.PI / 4;  // Radians
+body.Velocity = new Vector2D(10, 0);
+body.AngularVelocity = 2.0;
+
+// Physics
+body.Mass = 5.0;
+body.Inertia = 10.0;
+body.GravityScale = 0.5;  // Half gravity
+body.LinearDamping = 0.1;
+body.AngularDamping = 0.1;
+
+// Constraints
+body.FixedRotation = true;  // Prevent rotation
+
+// Collision filtering
+body.CategoryBits = 0x0002;  // I am a player
+body.MaskBits = 0x0004;      // I collide with enemies
+body.GroupIndex = -1;        // Negative = never collide with same group
+
+// Body types
+body.BodyType = BodyType2D.Dynamic;    // Normal physics
+body.BodyType = BodyType2D.Static;     // Never moves
+body.BodyType = BodyType2D.Kinematic;  // User-controlled velocity
+
+// Forces and impulses
+body.ApplyForce(new Vector2D(100, 0));
+body.ApplyForceAtPoint(force, worldPoint);
+body.ApplyImpulse(new Vector2D(10, 20));
+body.ApplyTorque(50.0);
+```
+
+### 2D Collision Events
+
+```csharp
+// Collision callbacks
+world.CollisionBegin += (sender, e) =>
+{
+    Console.WriteLine($"Collision started: {e.BodyA.Id} <-> {e.BodyB.Id}");
+    // e.Manifold contains contact points
+};
+
+world.CollisionEnd += (sender, e) =>
+{
+    Console.WriteLine($"Collision ended: {e.BodyA.Id} <-> {e.BodyB.Id}");
+};
+
+world.PreSolve += (sender, e) =>
+{
+    // Modify contact before resolution
+    // e.g., one-way platforms
+    if (e.BodyB.Velocity.Y > 0)
+        e.Manifold.IsActive = false;  // Disable collision
+};
+```
+
+### 2D Queries
+
+```csharp
+// Point query (what's at this location?)
+var bodies = world.QueryPoint(new Vector2D(5, 10));
+
+// AABB query (what's in this box?)
+var aabb = new AABB2D(new Vector2D(0, 0), new Vector2D(10, 10));
+var inBox = world.QueryAABB(aabb);
+
+// Raycast
+var hit = world.Raycast(
+    origin: new Vector2D(0, 10),
+    direction: new Vector2D(0, -1),
+    maxDistance: 100
+);
+
+if (hit.Hit)
+{
+    Console.WriteLine($"Hit {hit.Body.Id} at {hit.Point}");
+    Console.WriteLine($"Normal: {hit.Normal}, Distance: {hit.Fraction * 100}");
+}
+
+// Raycast all (get all intersections)
+var allHits = world.RaycastAll(origin, direction, maxDistance);
+foreach (var h in allHits)
+{
+    Console.WriteLine($"Hit: {h.Body.Id}");
+}
+```
+
+### 2D Explosion Force
+
+```csharp
+// Apply radial explosion force
+world.ApplyExplosionForce(
+    center: explosionPosition,
+    radius: 10.0,
+    force: 500.0
+);
+```
+
+---
+
 ## API Reference
 
 ### Static Factory Methods (Physics class)
@@ -2855,6 +3136,31 @@ void Shoot(Vector3D origin, Vector3D direction)
 | **Object Pools** | |
 | `CreatePool<T>()` | Create generic object pool |
 | `CreateListPool<T>()` | Create list pool |
+| **2D Physics** | |
+| `CreateWorld2D()` | Create 2D physics world with gravity |
+| `CreateEarthWorld2D()` | Create 2D world with Earth gravity |
+| `CreateZeroGWorld2D()` | Create 2D world with no gravity |
+| `CreatePlatformerWorld2D()` | Create 2D world with platformer gravity |
+| `CreateCircle2D(pos, radius, density)` | Create dynamic 2D circle |
+| `CreateBox2D(pos, width, height, density)` | Create dynamic 2D box |
+| `CreateStaticBox2D(pos, width, height)` | Create static 2D box |
+| `CreateEdge2D(start, end)` | Create 2D edge (line segment) |
+| `CreateChain2D(vertices, loop)` | Create 2D edge chain |
+| `CreateKinematic2D(pos, shape)` | Create 2D kinematic body |
+| `CreateCircleShape(radius)` | Create 2D circle shape |
+| `CreateBoxShape(width, height)` | Create 2D box shape |
+| `CreatePolygonShape(vertices)` | Create 2D polygon shape |
+| `CreateRegularPolygon(sides, radius)` | Create regular 2D polygon |
+| `CreateCapsuleShape(length, radius)` | Create 2D capsule shape |
+| `CreateTriangleShape(a, b, c)` | Create 2D triangle shape |
+| `CreateDistanceJoint2D(...)` | Create 2D distance joint |
+| `CreateSpringJoint2D(...)` | Create 2D spring joint (soft) |
+| `CreateRevoluteJoint2D(...)` | Create 2D revolute (hinge) joint |
+| `CreateMotorJoint2D(...)` | Create 2D motor joint |
+| `CreateWeldJoint2D(...)` | Create 2D weld joint |
+| `CreateMouseJoint2D(body, target)` | Create 2D mouse joint (dragging) |
+| `CreateRopeJoint2D(...)` | Create 2D rope joint (max distance) |
+| `CreatePrismaticJoint2D(...)` | Create 2D prismatic (slider) joint |
 
 ---
 

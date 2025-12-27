@@ -14,6 +14,7 @@ global using Artemis.Compute;
 global using Artemis.Destruction;
 global using Artemis.Modifiers;
 global using Artemis.Rendering;
+global using Artemis.Physics2D;
 
 namespace Artemis
 {
@@ -1585,6 +1586,235 @@ namespace Artemis
         {
             var ballistics = new BallisticsSystem();
             return ballistics.CreateRangeTable(projectile, maxDistance, interval, environment);
+        }
+
+        #endregion
+
+        #region 2D Physics
+
+        /// <summary>
+        /// Creates a 2D physics world with default gravity.
+        /// </summary>
+        public static PhysicsWorld2D CreateWorld2D()
+        {
+            return new PhysicsWorld2D();
+        }
+
+        /// <summary>
+        /// Creates a 2D physics world with custom gravity.
+        /// </summary>
+        public static PhysicsWorld2D CreateWorld2D(Vector2D gravity)
+        {
+            return new PhysicsWorld2D { Gravity = gravity };
+        }
+
+        /// <summary>
+        /// Creates a 2D physics world with Earth-like gravity.
+        /// </summary>
+        public static PhysicsWorld2D CreateEarthWorld2D()
+        {
+            return new PhysicsWorld2D { Gravity = new Vector2D(0, -9.81) };
+        }
+
+        /// <summary>
+        /// Creates a 2D physics world with zero gravity.
+        /// </summary>
+        public static PhysicsWorld2D CreateZeroGWorld2D()
+        {
+            return new PhysicsWorld2D { Gravity = Vector2D.Zero };
+        }
+
+        /// <summary>
+        /// Creates a 2D physics world with platformer-style gravity (stronger).
+        /// </summary>
+        public static PhysicsWorld2D CreatePlatformerWorld2D()
+        {
+            return new PhysicsWorld2D { Gravity = new Vector2D(0, -25) };
+        }
+
+        /// <summary>
+        /// Creates a dynamic 2D circle body.
+        /// </summary>
+        public static RigidBody2D CreateCircle2D(Vector2D position, double radius, double density = 1.0)
+        {
+            return RigidBody2D.CreateCircle(position, radius, density);
+        }
+
+        /// <summary>
+        /// Creates a dynamic 2D box body.
+        /// </summary>
+        public static RigidBody2D CreateBox2D(Vector2D position, double width, double height, double density = 1.0)
+        {
+            return RigidBody2D.CreateBox(position, width, height, density);
+        }
+
+        /// <summary>
+        /// Creates a static 2D box body (for platforms, walls).
+        /// </summary>
+        public static RigidBody2D CreateStaticBox2D(Vector2D position, double width, double height)
+        {
+            return RigidBody2D.CreateStaticBox(position, width, height);
+        }
+
+        /// <summary>
+        /// Creates a static 2D edge (line segment).
+        /// </summary>
+        public static RigidBody2D CreateEdge2D(Vector2D start, Vector2D end)
+        {
+            return RigidBody2D.CreateEdge(start, end);
+        }
+
+        /// <summary>
+        /// Creates a static 2D chain of edges.
+        /// </summary>
+        public static RigidBody2D CreateChain2D(Vector2D[] vertices, bool loop = false)
+        {
+            return RigidBody2D.CreateChain(vertices, loop);
+        }
+
+        /// <summary>
+        /// Creates a 2D kinematic body (moves by velocity, not forces).
+        /// </summary>
+        public static RigidBody2D CreateKinematic2D(Vector2D position, Shape2D shape)
+        {
+            return RigidBody2D.CreateKinematic(position, shape);
+        }
+
+        /// <summary>
+        /// Creates a 2D circle shape.
+        /// </summary>
+        public static CircleShape CreateCircleShape(double radius)
+        {
+            return new CircleShape(radius);
+        }
+
+        /// <summary>
+        /// Creates a 2D box shape.
+        /// </summary>
+        public static BoxShape CreateBoxShape(double width, double height)
+        {
+            return new BoxShape(width * 0.5, height * 0.5);
+        }
+
+        /// <summary>
+        /// Creates a 2D polygon shape from vertices.
+        /// </summary>
+        public static PolygonShape CreatePolygonShape(Vector2D[] vertices)
+        {
+            return new PolygonShape(vertices);
+        }
+
+        /// <summary>
+        /// Creates a regular 2D polygon shape.
+        /// </summary>
+        public static PolygonShape CreateRegularPolygon(int sides, double radius)
+        {
+            return PolygonShape.CreateRegular(sides, radius);
+        }
+
+        /// <summary>
+        /// Creates a 2D capsule shape.
+        /// </summary>
+        public static CapsuleShape CreateCapsuleShape(double halfLength, double radius, bool vertical = true)
+        {
+            return new CapsuleShape(halfLength, radius, vertical);
+        }
+
+        /// <summary>
+        /// Creates a 2D triangle shape.
+        /// </summary>
+        public static PolygonShape CreateTriangleShape(Vector2D a, Vector2D b, Vector2D c)
+        {
+            return PolygonShape.CreateTriangle(a, b, c);
+        }
+
+        /// <summary>
+        /// Creates a 2D distance joint.
+        /// </summary>
+        public static DistanceJoint2D CreateDistanceJoint2D(
+            RigidBody2D bodyA, RigidBody2D bodyB,
+            Vector2D anchorA, Vector2D anchorB)
+        {
+            return new DistanceJoint2D(bodyA, bodyB, anchorA, anchorB);
+        }
+
+        /// <summary>
+        /// Creates a 2D spring joint (soft distance joint).
+        /// </summary>
+        public static DistanceJoint2D CreateSpringJoint2D(
+            RigidBody2D bodyA, RigidBody2D bodyB,
+            Vector2D anchorA, Vector2D anchorB,
+            double frequency = 4.0, double damping = 0.5)
+        {
+            return new DistanceJoint2D(bodyA, bodyB, anchorA, anchorB)
+            {
+                Frequency = frequency,
+                DampingRatio = damping
+            };
+        }
+
+        /// <summary>
+        /// Creates a 2D revolute (hinge) joint.
+        /// </summary>
+        public static RevoluteJoint2D CreateRevoluteJoint2D(
+            RigidBody2D bodyA, RigidBody2D bodyB,
+            Vector2D anchor)
+        {
+            return new RevoluteJoint2D(bodyA, bodyB, anchor);
+        }
+
+        /// <summary>
+        /// Creates a 2D motor joint (revolute with motor).
+        /// </summary>
+        public static RevoluteJoint2D CreateMotorJoint2D(
+            RigidBody2D bodyA, RigidBody2D bodyB,
+            Vector2D anchor, double motorSpeed, double maxTorque)
+        {
+            return new RevoluteJoint2D(bodyA, bodyB, anchor)
+            {
+                EnableMotor = true,
+                MotorSpeed = motorSpeed,
+                MaxMotorTorque = maxTorque
+            };
+        }
+
+        /// <summary>
+        /// Creates a 2D weld joint (locks bodies together).
+        /// </summary>
+        public static WeldJoint2D CreateWeldJoint2D(
+            RigidBody2D bodyA, RigidBody2D bodyB,
+            Vector2D anchor)
+        {
+            return new WeldJoint2D(bodyA, bodyB, anchor);
+        }
+
+        /// <summary>
+        /// Creates a 2D mouse joint for dragging.
+        /// </summary>
+        public static MouseJoint2D CreateMouseJoint2D(RigidBody2D body, Vector2D target)
+        {
+            return new MouseJoint2D(body, target);
+        }
+
+        /// <summary>
+        /// Creates a 2D rope joint (max distance constraint).
+        /// </summary>
+        public static RopeJoint2D CreateRopeJoint2D(
+            RigidBody2D bodyA, RigidBody2D bodyB,
+            Vector2D anchorA, Vector2D anchorB,
+            double maxLength)
+        {
+            return new RopeJoint2D(bodyA, bodyB, anchorA, anchorB, maxLength);
+        }
+
+        /// <summary>
+        /// Creates a 2D prismatic (slider) joint.
+        /// </summary>
+        public static PrismaticJoint2D CreatePrismaticJoint2D(
+            RigidBody2D bodyA, RigidBody2D bodyB,
+            Vector2D anchor, Vector2D axis)
+        {
+            return new PrismaticJoint2D(bodyA, bodyB, anchor, axis);
         }
 
         #endregion
