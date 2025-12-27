@@ -27,7 +27,7 @@ public class ParticleProperties
     public float Mass { get; set; }          // Relative mass
     public int Charge { get; set; }           // Electric charge (-1, 0, +1)
     public ConsoleColor Color { get; set; }
-    public string Symbol { get; set; }
+    public required string Symbol { get; set; }
     public float Energy { get; set; }         // Kinetic energy (GeV scaled)
     public bool IsStable { get; set; }        // Does it decay?
     public float HalfLife { get; set; }       // Decay time (seconds)
