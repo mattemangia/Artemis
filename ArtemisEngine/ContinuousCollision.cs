@@ -58,9 +58,13 @@ public static class ContinuousCollision
 
         // Solve quadratic equation for time of impact
         // |startA + t*trajectory - posB|^2 = combinedRadius^2
+        // Let d = startA - posB = -centerToCenter
+        // |d + t*trajectory|^2 = combinedRadius^2
+        // Expanding: t^2*|trajectory|^2 + 2*t*(d·trajectory) + |d|^2 = combinedRadius^2
+        // So: a*t^2 + b*t + c = 0 where b = 2*(d·trajectory) = -2*(centerToCenter·trajectory)
 
         float a = trajectory.LengthSquared;
-        float b = 2 * Vector2.Dot(trajectory, centerToCenter);
+        float b = -2 * Vector2.Dot(trajectory, centerToCenter);
         float c = centerToCenter.LengthSquared - combinedRadius * combinedRadius;
 
         float discriminant = b * b - 4 * a * c;

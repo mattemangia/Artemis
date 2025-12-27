@@ -36,11 +36,52 @@ public class ParticleColliderWindow : GraphicsWindow
         { ParticleType.Quark, new Color4(0.2f, 0.9f, 0.2f, 1f) },
     };
 
+    // Cavalier 3D perspective settings
+    private const float CavalierAngle = 30f * MathF.PI / 180f; // 30 degree tilt
+    private const float DepthScale = 0.5f; // Depth foreshortening
+    private const float RingHeight = 3f; // Height of the accelerator tube
+    private float _viewRotation = 0f; // Rotation around Y axis for view
+
+    // Mouse control
+    private Vector2 _lastMousePos;
+    private bool _isRotating = false;
+    private bool _isPanning = false;
+
     public ParticleColliderWindow(int width, int height, string title)
         : base(width, height, title)
     {
         // Slow down for visibility
         TimeScale = 0.3f;
+    }
+
+    /// <summary>
+    /// Transform 2D physics coordinates to cavalier 3D projection
+    /// </summary>
+    private ArtemisEngine.Vector2 ToCavalier(ArtemisEngine.Vector2 pos, float height = 0)
+    {
+        // Rotate around view axis
+        float cos = MathF.Cos(_viewRotation);
+        float sin = MathF.Sin(_viewRotation);
+        float rx = pos.X * cos - pos.Y * sin;
+        float ry = pos.X * sin + pos.Y * cos;
+
+        // Apply cavalier projection:
+        // X stays as X
+        // Y is compressed and offset by depth
+        float projX = rx;
+        float projY = ry * MathF.Cos(CavalierAngle) + height;
+
+        return new ArtemisEngine.Vector2(projX, projY);
+    }
+
+    /// <summary>
+    /// Get depth value for sorting (higher Y = further back)
+    /// </summary>
+    private float GetDepth(ArtemisEngine.Vector2 pos)
+    {
+        float cos = MathF.Cos(_viewRotation);
+        float sin = MathF.Sin(_viewRotation);
+        return pos.X * sin + pos.Y * cos;
     }
 
     protected override void Initialize()
@@ -188,6 +229,62 @@ public class ParticleColliderWindow : GraphicsWindow
 
     protected override void HandleInput()
     {
+        // === MOUSE CONTROLS ===
+        var mousePos = MouseState.Position;
+
+        // Right-click drag to rotate view
+        if (MouseState.IsButtonDown(MouseButton.Right))
+        {
+            if (!_isRotating)
+            {
+                _isRotating = true;
+                _lastMousePos = mousePos;
+            }
+            else
+            {
+                float deltaX = mousePos.X - _lastMousePos.X;
+                _viewRotation -= deltaX * 0.005f;
+                _lastMousePos = mousePos;
+            }
+        }
+        else
+        {
+            _isRotating = false;
+        }
+
+        // Middle-click drag to pan
+        if (MouseState.IsButtonDown(MouseButton.Middle))
+        {
+            if (!_isPanning)
+            {
+                _isPanning = true;
+                _lastMousePos = mousePos;
+            }
+            else
+            {
+                float deltaX = mousePos.X - _lastMousePos.X;
+                float deltaY = mousePos.Y - _lastMousePos.Y;
+                CameraPosition = new Vector2d(
+                    CameraPosition.X - deltaX * 0.1,
+                    CameraPosition.Y + deltaY * 0.1
+                );
+                _lastMousePos = mousePos;
+            }
+        }
+        else
+        {
+            _isPanning = false;
+        }
+
+        // Mouse wheel to zoom
+        if (MouseState.ScrollDelta.Y != 0)
+        {
+            CameraZoom *= 1f - MouseState.ScrollDelta.Y * 0.1f;
+            CameraZoom = Math.Clamp(CameraZoom, 5, 100);
+        }
+
+        // === KEYBOARD CONTROLS ===
+
         // Inject beams
         if (KeyboardState.IsKeyPressed(Keys.Space))
         {
@@ -214,8 +311,18 @@ public class ParticleColliderWindow : GraphicsWindow
             InjectSpecificBeam(ParticleType.Proton, ParticleType.Electron);
         }
 
+        // View rotation controls (Q/E) - keyboard fallback
+        if (KeyboardState.IsKeyDown(Keys.Q))
+        {
+            _viewRotation += 0.02f;
+        }
+        if (KeyboardState.IsKeyDown(Keys.E))
+        {
+            _viewRotation -= 0.02f;
+        }
+
         // Export data
-        if (KeyboardState.IsKeyPressed(Keys.E))
+        if (KeyboardState.IsKeyPressed(Keys.R))
         {
             try
             {
@@ -266,104 +373,300 @@ public class ParticleColliderWindow : GraphicsWindow
 
     protected override void Render()
     {
-        // Draw accelerator ring
-        DrawRing(new ArtemisEngine.Vector2(0, 0), _accelerator.Radius, new Color4(0.3f, 0.3f, 0.4f, 1f), 3f);
+        // === CAVALIER 3D PERSPECTIVE RENDERING ===
 
-        // Draw interaction points
-        foreach (var ip in _accelerator.GetInteractionPoints())
-        {
-            DrawCircle(ip, 0.8f, new Color4(0.8f, 0.2f, 0.2f, 1f), true);
-            DrawCircle(ip, 1.2f, new Color4(1f, 0.3f, 0.3f, 0.5f), false);
-        }
+        // Draw ground plane grid (for depth reference)
+        DrawGroundGrid();
 
-        // Draw detectors
+        // Draw accelerator ring in 3D (back half first for depth sorting)
+        Draw3DAcceleratorRing(drawBackHalf: true);
+
+        // Draw detectors in 3D
         foreach (var detector in _experiment.Detectors)
         {
             Color4 detectorColor = detector.Type switch
             {
-                DetectorType.Tracker => new Color4(0.2f, 0.5f, 0.8f, 0.3f),
-                DetectorType.Calorimeter => new Color4(0.5f, 0.8f, 0.2f, 0.3f),
-                DetectorType.MuonChamber => new Color4(0.8f, 0.5f, 0.2f, 0.3f),
-                DetectorType.InteractionPoint => new Color4(1f, 0.2f, 0.2f, 0.5f),
-                _ => new Color4(0.5f, 0.5f, 0.5f, 0.3f)
+                DetectorType.Tracker => new Color4(0.2f, 0.5f, 0.8f, 0.4f),
+                DetectorType.Calorimeter => new Color4(0.5f, 0.8f, 0.2f, 0.4f),
+                DetectorType.MuonChamber => new Color4(0.8f, 0.5f, 0.2f, 0.4f),
+                DetectorType.InteractionPoint => new Color4(1f, 0.2f, 0.2f, 0.6f),
+                _ => new Color4(0.5f, 0.5f, 0.5f, 0.4f)
             };
 
-            DrawCircle(detector.Position, detector.Radius, detectorColor, false);
+            // Draw detector as 3D cylinder projection
+            Draw3DDetector(detector.Position, detector.Radius, detectorColor);
         }
 
-        // Get all particles
+        // Draw interaction points in 3D
+        foreach (var ip in _accelerator.GetInteractionPoints())
+        {
+            var projected = ToCavalier(ip, RingHeight);
+            DrawCircle(projected, 1.0f, new Color4(0.8f, 0.2f, 0.2f, 1f), true);
+            DrawCircle(projected, 1.5f, new Color4(1f, 0.3f, 0.3f, 0.4f), false);
+        }
+
+        // Get all particles sorted by depth
         var allParticles = World.Bodies
             .Where(b => b.UserData is Particle)
             .Select(b => (Particle)b.UserData!)
+            .OrderBy(p => GetDepth(p.Body.Position))
             .ToList();
 
-        // Draw particle trails
+        // Draw particle trails in 3D
         foreach (var particle in allParticles)
         {
             if (particle.Trail.Count > 1)
             {
                 Color4 particleColor = ParticleColors.GetValueOrDefault(particle.Properties.Type, Color4.White);
-                Color4 trailStart = new Color4(particleColor.R * 0.3f, particleColor.G * 0.3f, particleColor.B * 0.3f, 0.2f);
-                Color4 trailEnd = new Color4(particleColor.R, particleColor.G, particleColor.B, 0.8f);
-
-                DrawTrail(particle.Trail, trailStart, trailEnd);
+                Draw3DTrail(particle.Trail, particleColor);
             }
         }
 
-        // Draw particles
+        // Draw particles in 3D with shadows
         foreach (var particle in allParticles)
         {
             Color4 color = ParticleColors.GetValueOrDefault(particle.Properties.Type, Color4.White);
+            float radius = particle.Body.Shape is CircleShape cs ? cs.Radius : 0.15f;
 
-            // Add glow effect
-            DrawCircle(particle.Body.Position, particle.Body.Shape is CircleShape c ? c.Radius * 2 : 0.3f,
-                new Color4(color.R, color.G, color.B, 0.2f), true);
+            // Draw shadow on ground
+            var shadowPos = ToCavalier(particle.Body.Position, 0);
+            DrawCircle(shadowPos, radius * 0.8f, new Color4(0f, 0f, 0f, 0.3f), true);
 
-            // Draw particle
-            DrawCircle(particle.Body.Position, particle.Body.Shape is CircleShape cs ? cs.Radius : 0.15f, color, true);
+            // Draw particle at ring height
+            var particlePos = ToCavalier(particle.Body.Position, RingHeight);
 
-            // Draw velocity vector
+            // Glow effect
+            DrawCircle(particlePos, radius * 2.5f, new Color4(color.R, color.G, color.B, 0.15f), true);
+            DrawCircle(particlePos, radius * 1.5f, new Color4(color.R, color.G, color.B, 0.3f), true);
+
+            // Main particle
+            DrawCircle(particlePos, radius, color, true);
+
+            // Velocity vector
             if (particle.Body.Velocity.Length > 0.5f)
             {
-                ArtemisEngine.Vector2 velocityEnd = particle.Body.Position + particle.Body.Velocity.Normalized * 1.5f;
-                DrawLine(particle.Body.Position, velocityEnd, new Color4(color.R, color.G, color.B, 0.5f), 1f);
+                var velEnd = ToCavalier(
+                    particle.Body.Position + particle.Body.Velocity.Normalized * 2f,
+                    RingHeight);
+                DrawLine(particlePos, velEnd, new Color4(color.R, color.G, color.B, 0.6f), 1.5f);
             }
         }
 
-        // Draw collision events
+        // Draw front half of ring (on top of particles)
+        Draw3DAcceleratorRing(drawBackHalf: false);
+
+        // Draw collision events in 3D
         foreach (var (evt, timestamp) in _recentCollisions)
         {
             float age = _experiment.SimulationTime - timestamp;
             if (age > 2.0f) continue;
 
             float alpha = 1f - (age / 2f);
-            float radius = age * 4f + 0.5f;
+            float radius = age * 5f + 0.5f;
 
-            // Explosion effect
-            Color4 explosionColor = new Color4(1f, 0.8f, 0.2f, alpha * 0.8f);
-            DrawCircle(evt.CollisionPoint, radius, explosionColor, false);
+            var collisionPos = ToCavalier(evt.CollisionPoint, RingHeight);
 
-            // Inner glow
-            if (age < 0.5f)
+            // Multiple expanding rings for 3D explosion effect
+            for (int i = 0; i < 3; i++)
             {
-                DrawCircle(evt.CollisionPoint, radius * 0.5f, new Color4(1f, 1f, 1f, alpha), true);
+                float ringRadius = radius * (1f + i * 0.3f);
+                float ringAlpha = alpha * (1f - i * 0.3f);
+                DrawCircle(collisionPos, ringRadius, new Color4(1f, 0.8f - i * 0.2f, 0.2f, ringAlpha * 0.6f), false);
+            }
+
+            // Central flash
+            if (age < 0.3f)
+            {
+                DrawCircle(collisionPos, radius * 0.3f, new Color4(1f, 1f, 1f, alpha), true);
             }
         }
+
+        // Draw CERN-style data panels
+        DrawCERNInterface();
+    }
+
+    /// <summary>
+    /// Draw ground reference grid
+    /// </summary>
+    private void DrawGroundGrid()
+    {
+        Color4 gridColor = new Color4(0.15f, 0.15f, 0.2f, 0.5f);
+        float gridSize = 5f;
+        int gridLines = 8;
+
+        for (int i = -gridLines; i <= gridLines; i++)
+        {
+            // Horizontal lines
+            var start = ToCavalier(new ArtemisEngine.Vector2(-gridLines * gridSize, i * gridSize), 0);
+            var end = ToCavalier(new ArtemisEngine.Vector2(gridLines * gridSize, i * gridSize), 0);
+            DrawLine(start, end, gridColor, 1f);
+
+            // Vertical lines
+            start = ToCavalier(new ArtemisEngine.Vector2(i * gridSize, -gridLines * gridSize), 0);
+            end = ToCavalier(new ArtemisEngine.Vector2(i * gridSize, gridLines * gridSize), 0);
+            DrawLine(start, end, gridColor, 1f);
+        }
+    }
+
+    /// <summary>
+    /// Draw the accelerator ring as a 3D tube
+    /// </summary>
+    private void Draw3DAcceleratorRing(bool drawBackHalf)
+    {
+        int segments = 64;
+        float tubeRadius = 0.8f;
+
+        for (int i = 0; i < segments; i++)
+        {
+            float angle1 = 2 * MathF.PI * i / segments;
+            float angle2 = 2 * MathF.PI * (i + 1) / segments;
+
+            // Check if this segment is in front or back
+            float midAngle = (angle1 + angle2) / 2;
+            float depth = MathF.Sin(midAngle + _viewRotation);
+            bool isBack = depth < 0;
+
+            if (isBack != drawBackHalf)
+                continue;
+
+            // Ring position
+            var p1 = new ArtemisEngine.Vector2(
+                MathF.Cos(angle1) * _accelerator.Radius,
+                MathF.Sin(angle1) * _accelerator.Radius);
+            var p2 = new ArtemisEngine.Vector2(
+                MathF.Cos(angle2) * _accelerator.Radius,
+                MathF.Sin(angle2) * _accelerator.Radius);
+
+            // Project to cavalier view
+            var proj1Top = ToCavalier(p1, RingHeight + tubeRadius);
+            var proj1Bot = ToCavalier(p1, RingHeight - tubeRadius);
+            var proj2Top = ToCavalier(p2, RingHeight + tubeRadius);
+            var proj2Bot = ToCavalier(p2, RingHeight - tubeRadius);
+
+            // Color based on depth (darker = further)
+            float brightness = drawBackHalf ? 0.25f : 0.5f;
+            Color4 tubeColor = new Color4(0.3f * brightness, 0.4f * brightness, 0.6f * brightness, 0.9f);
+
+            // Draw tube segment edges
+            DrawLine(proj1Top, proj2Top, tubeColor, 2f);
+            DrawLine(proj1Bot, proj2Bot, tubeColor, 2f);
+
+            // Draw vertical connectors occasionally
+            if (i % 4 == 0)
+            {
+                DrawLine(proj1Top, proj1Bot, tubeColor, 1f);
+            }
+        }
+
+        // Draw beam line (glowing center)
+        for (int i = 0; i < segments; i++)
+        {
+            float angle1 = 2 * MathF.PI * i / segments;
+            float angle2 = 2 * MathF.PI * (i + 1) / segments;
+
+            float depth = MathF.Sin((angle1 + angle2) / 2 + _viewRotation);
+            bool isBack = depth < 0;
+            if (isBack != drawBackHalf)
+                continue;
+
+            var p1 = new ArtemisEngine.Vector2(
+                MathF.Cos(angle1) * _accelerator.Radius,
+                MathF.Sin(angle1) * _accelerator.Radius);
+            var p2 = new ArtemisEngine.Vector2(
+                MathF.Cos(angle2) * _accelerator.Radius,
+                MathF.Sin(angle2) * _accelerator.Radius);
+
+            var proj1 = ToCavalier(p1, RingHeight);
+            var proj2 = ToCavalier(p2, RingHeight);
+
+            float brightness = drawBackHalf ? 0.4f : 0.8f;
+            Color4 beamColor = new Color4(0.2f * brightness, 0.6f * brightness, 1f * brightness, 0.6f);
+            DrawLine(proj1, proj2, beamColor, 1.5f);
+        }
+    }
+
+    /// <summary>
+    /// Draw detector as 3D cylinder projection
+    /// </summary>
+    private void Draw3DDetector(ArtemisEngine.Vector2 pos, float radius, Color4 color)
+    {
+        var topPos = ToCavalier(pos, RingHeight + 2);
+        var botPos = ToCavalier(pos, RingHeight - 2);
+
+        // Draw ellipse at top and bottom
+        DrawEllipse3D(pos, radius, RingHeight + 2, color);
+        DrawEllipse3D(pos, radius, RingHeight - 2, new Color4(color.R * 0.5f, color.G * 0.5f, color.B * 0.5f, color.A));
+
+        // Draw vertical lines
+        int vLines = 8;
+        for (int i = 0; i < vLines; i++)
+        {
+            float angle = 2 * MathF.PI * i / vLines;
+            var offset = new ArtemisEngine.Vector2(MathF.Cos(angle) * radius, MathF.Sin(angle) * radius);
+            var top = ToCavalier(pos + offset, RingHeight + 2);
+            var bot = ToCavalier(pos + offset, RingHeight - 2);
+            DrawLine(top, bot, new Color4(color.R * 0.7f, color.G * 0.7f, color.B * 0.7f, color.A * 0.5f), 1f);
+        }
+    }
+
+    /// <summary>
+    /// Draw ellipse in 3D space
+    /// </summary>
+    private void DrawEllipse3D(ArtemisEngine.Vector2 center, float radius, float height, Color4 color)
+    {
+        int segments = 24;
+        for (int i = 0; i < segments; i++)
+        {
+            float angle1 = 2 * MathF.PI * i / segments;
+            float angle2 = 2 * MathF.PI * (i + 1) / segments;
+
+            var p1 = center + new ArtemisEngine.Vector2(MathF.Cos(angle1) * radius, MathF.Sin(angle1) * radius);
+            var p2 = center + new ArtemisEngine.Vector2(MathF.Cos(angle2) * radius, MathF.Sin(angle2) * radius);
+
+            DrawLine(ToCavalier(p1, height), ToCavalier(p2, height), color, 1f);
+        }
+    }
+
+    /// <summary>
+    /// Draw particle trail in 3D
+    /// </summary>
+    private void Draw3DTrail(List<ArtemisEngine.Vector2> points, Color4 color)
+    {
+        if (points.Count < 2) return;
+
+        for (int i = 0; i < points.Count - 1; i++)
+        {
+            float t = (float)i / points.Count;
+            float alpha = t * 0.6f;
+            Color4 trailColor = new Color4(color.R * t, color.G * t, color.B * t, alpha);
+
+            var p1 = ToCavalier(points[i], RingHeight);
+            var p2 = ToCavalier(points[i + 1], RingHeight);
+            DrawLine(p1, p2, trailColor, 1f);
+        }
+    }
+
+    /// <summary>
+    /// Draw CERN-style interface panels (simulated with drawing primitives)
+    /// </summary>
+    private void DrawCERNInterface()
+    {
+        // We'll use the title bar for now, but this is where you'd add
+        // overlay panels, graphs, and data displays in a full implementation
     }
 
     protected override void DrawUI()
     {
-        // UI is drawn in the title bar and console for now
+        // UI is drawn in the title bar
         var (b1, b2, avgE) = _accelerator.GetStatistics();
         var particleCount = World.Bodies.Count(b => b.UserData is Particle);
 
-        Title = $"Artemis Particle Collider | " +
+        Title = $"ARTEMIS LHC Simulator | " +
                 $"Beam1: {b1} | Beam2: {b2} | " +
-                $"Energy: {avgE:F0}GeV | " +
+                $"E: {avgE:F0}GeV | " +
                 $"Collisions: {_experiment.TotalCollisions} | " +
                 $"Particles: {particleCount} | " +
-                $"TimeScale: {TimeScale:F2}x | " +
                 (IsPaused ? "[PAUSED] " : "") +
-                "[SPACE]Inject [1-3]Types [C]Clear [P]Pause [+-]Speed [ESC]Quit";
+                "[SPACE]Inject [RightDrag]Rotate [Scroll]Zoom [C]Clear";
     }
 }

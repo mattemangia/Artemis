@@ -43,6 +43,10 @@ public class SandTetrisWindow : GameWindow
     private int _settleFrames = 0;
     private const int SettleFramesRequired = 60;
 
+    // Mouse control
+    private Vector2 _lastMousePos;
+    private bool _isRotating = false;
+
     // Shaders
     private int _shaderProgram;
     private int _sphereVao;
@@ -278,7 +282,28 @@ public class SandTetrisWindow : GameWindow
         if (KeyboardState.IsKeyDown(Keys.Escape))
             Close();
 
-        // Camera rotation
+        // Mouse-based camera rotation (right mouse button)
+        var mousePos = MouseState.Position;
+        if (MouseState.IsButtonDown(MouseButton.Right))
+        {
+            if (!_isRotating)
+            {
+                _isRotating = true;
+                _lastMousePos = mousePos;
+            }
+            else
+            {
+                float deltaX = mousePos.X - _lastMousePos.X;
+                _cameraRotation -= deltaX * 0.01f;
+                _lastMousePos = mousePos;
+            }
+        }
+        else
+        {
+            _isRotating = false;
+        }
+
+        // Keyboard camera rotation (fallback)
         if (KeyboardState.IsKeyDown(Keys.Q))
             _cameraRotation += 0.02f;
         if (KeyboardState.IsKeyDown(Keys.E))
@@ -292,7 +317,30 @@ public class SandTetrisWindow : GameWindow
             MathF.Cos(_cameraRotation) * radius
         );
 
-        // Drop position controls
+        // Mouse-based aiming (move mouse to aim, left click to drop)
+        if (!_waitingForSettle && !_game.IsGameOver)
+        {
+            // Convert mouse position to drop coordinates
+            // Map screen X (0 to Width) to drop X (-4.5 to 4.5)
+            // Map screen Y (0 to Height) to drop Z (-0.8 to 0.8)
+            float normalizedX = mousePos.X / Size.X;  // 0 to 1
+            float normalizedY = mousePos.Y / Size.Y;  // 0 to 1
+
+            _dropX = (normalizedX - 0.5) * 9.0;  // -4.5 to 4.5
+            _dropZ = (normalizedY - 0.5) * 1.6;  // -0.8 to 0.8
+            _dropX = Math.Clamp(_dropX, -4.5, 4.5);
+            _dropZ = Math.Clamp(_dropZ, -0.8, 0.8);
+
+            // Left click to drop ball
+            if (MouseState.IsButtonPressed(MouseButton.Left))
+            {
+                _game.DropBall(_dropX, _dropZ);
+                _waitingForSettle = true;
+                _settleFrames = 0;
+            }
+        }
+
+        // Keyboard aiming controls (fallback)
         if (!_waitingForSettle)
         {
             double moveStep = 0.3;
@@ -305,7 +353,7 @@ public class SandTetrisWindow : GameWindow
             if (KeyboardState.IsKeyDown(Keys.Down))
                 _dropZ = Math.Min(_dropZ + moveStep, 0.8);
 
-            // Drop ball
+            // Space to drop ball (keyboard fallback)
             if (KeyboardState.IsKeyPressed(Keys.Space) && !_game.IsGameOver)
             {
                 _game.DropBall(_dropX, _dropZ);
@@ -323,31 +371,30 @@ public class SandTetrisWindow : GameWindow
             _waitingForSettle = false;
         }
 
-        // Physics update
-        if (_waitingForSettle || _game.ShiningParticles.Count > 0)
+        // Physics update - ALWAYS run physics simulation (not just when settling)
+        _physicsAccumulator += args.Time;
+        while (_physicsAccumulator >= PhysicsStep)
         {
-            _physicsAccumulator += args.Time;
-            while (_physicsAccumulator >= PhysicsStep)
-            {
-                _game.Update(PhysicsStep);
-                _physicsAccumulator -= PhysicsStep;
+            _game.Update(PhysicsStep);
+            _physicsAccumulator -= PhysicsStep;
+
+            if (_waitingForSettle)
                 _settleFrames++;
-            }
+        }
 
-            // Check if settled
-            if (_waitingForSettle && _settleFrames >= SettleFramesRequired)
+        // Check if settled
+        if (_waitingForSettle && _settleFrames >= SettleFramesRequired)
+        {
+            _game.CheckAndClearLines();
+            _game.CheckGameState();
+
+            if (!_game.IsGameOver)
             {
-                _game.CheckAndClearLines();
-                _game.CheckGameState();
-
-                if (!_game.IsGameOver)
-                {
-                    _game.NextTurn();
-                }
-
-                _waitingForSettle = false;
-                _settleFrames = 0;
+                _game.NextTurn();
             }
+
+            _waitingForSettle = false;
+            _settleFrames = 0;
         }
 
         // Update title
@@ -363,7 +410,7 @@ public class SandTetrisWindow : GameWindow
         Title = $"Sand Tetris 3D | Turn: {_game.Turn} | Score: {_game.Score} | " +
                 $"Grains: {_game.ActiveParticleCount} | " +
                 $"Ball: {_game.CurrentBall.ColorName} ({_game.CurrentBall.Radius:F1}){status} | " +
-                "[Q/E]Rotate [Arrows]Aim [SPACE]Drop [R]Reset";
+                "[Mouse]Aim [LClick]Drop [RDrag]Rotate [R]Reset";
     }
 
     protected override void OnRenderFrame(FrameEventArgs args)
