@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" alt="Artemis Physics Engine Logo" width="200"/>
+  <img src="logo.png" alt="Artemis Physics Engine Logo" width="350"/>
 </p>
 
 <h1 align="center">Artemis Physics Engine</h1>
