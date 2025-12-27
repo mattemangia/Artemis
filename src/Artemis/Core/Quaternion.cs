@@ -343,6 +343,18 @@ namespace Artemis.Core
 
         #region Instance Methods
 
+        private static double CopySign(double value, double sign)
+        {
+#if NETSTANDARD2_1
+            long valueBits = BitConverter.DoubleToInt64Bits(value);
+            long signBits = BitConverter.DoubleToInt64Bits(sign);
+            valueBits = (valueBits & 0x7FFFFFFFFFFFFFFF) | (signBits & unchecked((long)0x8000000000000000));
+            return BitConverter.Int64BitsToDouble(valueBits);
+#else
+            return Math.CopySign(value, sign);
+#endif
+        }
+
         /// <summary>
         /// Converts this quaternion to Euler angles (in radians).
         /// </summary>
@@ -354,7 +366,7 @@ namespace Artemis.Core
 
             double sinp = 2 * (W * Y - Z * X);
             double pitch = Math.Abs(sinp) >= 1
-                ? Math.CopySign(PhysicsConstants.Pi / 2, sinp)
+                ? CopySign(PhysicsConstants.Pi / 2, sinp)
                 : Math.Asin(sinp);
 
             double sinyCosp = 2 * (W * Z + X * Y);

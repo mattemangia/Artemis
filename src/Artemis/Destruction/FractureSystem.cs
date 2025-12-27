@@ -693,6 +693,11 @@ namespace Artemis.Destruction
     {
         #region Fields
 
+#if NETSTANDARD2_1
+        private static readonly Random SharedRandom = new Random();
+        private static readonly object SharedRandomLock = new object();
+#endif
+
         private readonly List<Particle> _particles;
         private readonly SpatialHash _spatialHash;
         private readonly double _cohesion;
@@ -829,6 +834,18 @@ namespace Artemis.Destruction
 
         #region Erosion
 
+        private static double NextSharedDouble()
+        {
+#if NETSTANDARD2_1
+            lock (SharedRandomLock)
+            {
+                return SharedRandom.NextDouble();
+            }
+#else
+            return Random.Shared.NextDouble();
+#endif
+        }
+
         /// <summary>
         /// Applies wind erosion to the body.
         /// </summary>
@@ -849,14 +866,14 @@ namespace Artemis.Destruction
                     // Calculate erosion chance based on wind strength and cohesion
                     double erosionChance = windStrength * _erosionRate * (1 - _cohesion) * deltaTime;
 
-                    if (Random.Shared.NextDouble() < erosionChance)
+                    if (NextSharedDouble() < erosionChance)
                     {
                         // Remove particle and add to eroded list
                         _particles.RemoveAt(i);
 
                         // Give it velocity in wind direction
-                        p.Velocity = windDirection * windStrength * (0.5 + Random.Shared.NextDouble());
-                        p.Lifetime = 5 + Random.Shared.NextDouble() * 5;
+                        p.Velocity = windDirection * windStrength * (0.5 + NextSharedDouble());
+                        p.Lifetime = 5 + NextSharedDouble() * 5;
                         erodedParticles.Add(p);
                     }
                 }
@@ -885,13 +902,13 @@ namespace Artemis.Destruction
                     double forceFactor = 1 - (dist / impactRadius);
                     double erosionChance = forceFactor * impactForce * (1 - _cohesion) * 0.01;
 
-                    if (Random.Shared.NextDouble() < erosionChance)
+                    if (NextSharedDouble() < erosionChance)
                     {
                         _particles.RemoveAt(i);
 
                         var direction = toParticle.Normalized;
                         p.Velocity = direction * impactForce * forceFactor * 0.1;
-                        p.Lifetime = 3 + Random.Shared.NextDouble() * 3;
+                        p.Lifetime = 3 + NextSharedDouble() * 3;
                         erodedParticles.Add(p);
                     }
                 }

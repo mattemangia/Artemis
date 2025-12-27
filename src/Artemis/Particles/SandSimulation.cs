@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Artemis.Core;
 
 namespace Artemis.Particles
@@ -29,6 +30,11 @@ namespace Artemis.Particles
         /// Gets the number of particles.
         /// </summary>
         public int ParticleCount => _particles.Count;
+
+        /// <summary>
+        /// Gets the number of active particles.
+        /// </summary>
+        public int ActiveParticleCount => _particles.Count(p => p.IsActive);
 
         /// <summary>
         /// Gets or sets the gravity vector.
