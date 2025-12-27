@@ -324,81 +324,14 @@ public class PhysicsWorld
 
     private bool BoxVsBox(RigidBody bodyA, RigidBody bodyB, BoxShape boxA, BoxShape boxB, out Collision collision)
     {
-        collision = new Collision();
-
-        Vector2 delta = bodyB.Position - bodyA.Position;
-
-        // Simple AABB collision for now (assumes no rotation or minimal rotation)
-        float halfWidthA = boxA.Width / 2;
-        float halfHeightA = boxA.Height / 2;
-        float halfWidthB = boxB.Width / 2;
-        float halfHeightB = boxB.Height / 2;
-
-        float overlapX = (halfWidthA + halfWidthB) - MathF.Abs(delta.X);
-        float overlapY = (halfHeightA + halfHeightB) - MathF.Abs(delta.Y);
-
-        if (overlapX <= 0 || overlapY <= 0)
-            return false;
-
-        if (overlapX < overlapY)
-        {
-            collision.Normal = new Vector2(delta.X > 0 ? 1 : -1, 0);
-            collision.Penetration = overlapX;
-        }
-        else
-        {
-            collision.Normal = new Vector2(0, delta.Y > 0 ? 1 : -1);
-            collision.Penetration = overlapY;
-        }
-
-        collision.ContactPoint = bodyA.Position + delta * 0.5f;
-        return true;
+        // Use SAT (Separating Axis Theorem) for accurate rotated box collision
+        return CollisionDetection.BoxVsBoxSAT(bodyA, bodyB, boxA, boxB, out collision);
     }
 
     private bool CircleVsBox(RigidBody circleBody, RigidBody boxBody, CircleShape circle, BoxShape box, out Collision collision)
     {
-        collision = new Collision();
-
-        Vector2 delta = circleBody.Position - boxBody.Position;
-
-        float halfW = box.Width / 2;
-        float halfH = box.Height / 2;
-
-        // Clamp circle center to box
-        Vector2 closest = new Vector2(
-            Math.Clamp(delta.X, -halfW, halfW),
-            Math.Clamp(delta.Y, -halfH, halfH)
-        );
-
-        Vector2 localPoint = delta - closest;
-        float distanceSquared = localPoint.LengthSquared;
-
-        if (distanceSquared >= circle.Radius * circle.Radius)
-            return false;
-
-        float distance = MathF.Sqrt(distanceSquared);
-
-        if (distance > 0)
-        {
-            collision.Normal = localPoint / distance;
-        }
-        else
-        {
-            // Circle center is inside the box
-            if (MathF.Abs(delta.X) > MathF.Abs(delta.Y))
-            {
-                collision.Normal = new Vector2(delta.X > 0 ? 1 : -1, 0);
-            }
-            else
-            {
-                collision.Normal = new Vector2(0, delta.Y > 0 ? 1 : -1);
-            }
-        }
-
-        collision.Penetration = circle.Radius - distance;
-        collision.ContactPoint = circleBody.Position - collision.Normal * circle.Radius;
-
-        return true;
+        // Use improved circle vs box with rotation support
+        return CollisionDetection.CircleVsBoxImproved(circleBody, boxBody, circle, box, out collision);
     }
 
     private void ResolveCollision(RigidBody bodyA, RigidBody bodyB, Collision collision)
@@ -414,41 +347,75 @@ public class PhysicsWorld
         if (!bodyB.IsStatic)
             bodyB.Position += correction * bodyB.InverseMass;
 
-        // Velocity resolution
-        Vector2 relativeVelocity = bodyB.Velocity - bodyA.Velocity;
+        // Calculate relative velocity at contact point (includes rotation!)
+        Vector2 rA = collision.ContactPoint - bodyA.Position;
+        Vector2 rB = collision.ContactPoint - bodyB.Position;
+
+        Vector2 velocityA = bodyA.Velocity + new Vector2(-rA.Y * bodyA.AngularVelocity, rA.X * bodyA.AngularVelocity);
+        Vector2 velocityB = bodyB.Velocity + new Vector2(-rB.Y * bodyB.AngularVelocity, rB.X * bodyB.AngularVelocity);
+        Vector2 relativeVelocity = velocityB - velocityA;
+
         float velocityAlongNormal = Vector2.Dot(relativeVelocity, collision.Normal);
 
         if (velocityAlongNormal > 0)
             return;
 
+        // Calculate impulse with rotation
         float restitution = Math.Min(bodyA.Restitution, bodyB.Restitution);
+
+        float rACrossN = Vector2.Cross(rA, collision.Normal);
+        float rBCrossN = Vector2.Cross(rB, collision.Normal);
+
         float impulseMagnitude = -(1 + restitution) * velocityAlongNormal;
-        impulseMagnitude /= bodyA.InverseMass + bodyB.InverseMass;
+        impulseMagnitude /= bodyA.InverseMass + bodyB.InverseMass +
+                           rACrossN * rACrossN * bodyA.InverseInertia +
+                           rBCrossN * rBCrossN * bodyB.InverseInertia;
 
         Vector2 impulse = collision.Normal * impulseMagnitude;
 
+        // Apply impulse at contact point (includes torque!)
         if (!bodyA.IsStatic)
+        {
             bodyA.Velocity -= impulse * bodyA.InverseMass;
-        if (!bodyB.IsStatic)
-            bodyB.Velocity += impulse * bodyB.InverseMass;
+            bodyA.AngularVelocity -= Vector2.Cross(rA, impulse) * bodyA.InverseInertia;
+        }
 
-        // Friction
-        relativeVelocity = bodyB.Velocity - bodyA.Velocity;
+        if (!bodyB.IsStatic)
+        {
+            bodyB.Velocity += impulse * bodyB.InverseMass;
+            bodyB.AngularVelocity += Vector2.Cross(rB, impulse) * bodyB.InverseInertia;
+        }
+
+        // Friction with rotation
+        relativeVelocity = velocityB - velocityA;
         Vector2 tangent = relativeVelocity - collision.Normal * Vector2.Dot(relativeVelocity, collision.Normal);
+
         if (tangent.LengthSquared > 0.0001f)
         {
             tangent = tangent.Normalized;
 
+            float rACrossT = Vector2.Cross(rA, tangent);
+            float rBCrossT = Vector2.Cross(rB, tangent);
+
             float frictionMagnitude = -Vector2.Dot(relativeVelocity, tangent);
-            frictionMagnitude /= bodyA.InverseMass + bodyB.InverseMass;
+            frictionMagnitude /= bodyA.InverseMass + bodyB.InverseMass +
+                                rACrossT * rACrossT * bodyA.InverseInertia +
+                                rBCrossT * rBCrossT * bodyB.InverseInertia;
 
             float mu = MathF.Sqrt(bodyA.Friction * bodyA.Friction + bodyB.Friction * bodyB.Friction);
             Vector2 frictionImpulse = tangent * Math.Clamp(frictionMagnitude, -impulseMagnitude * mu, impulseMagnitude * mu);
 
             if (!bodyA.IsStatic)
+            {
                 bodyA.Velocity -= frictionImpulse * bodyA.InverseMass;
+                bodyA.AngularVelocity -= Vector2.Cross(rA, frictionImpulse) * bodyA.InverseInertia;
+            }
+
             if (!bodyB.IsStatic)
+            {
                 bodyB.Velocity += frictionImpulse * bodyB.InverseMass;
+                bodyB.AngularVelocity += Vector2.Cross(rB, frictionImpulse) * bodyB.InverseInertia;
+            }
         }
     }
 }
