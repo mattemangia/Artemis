@@ -64,7 +64,7 @@ abstract class Game
     public Game()
     {
         _world = new PhysicsWorld(new Vector2(0, -20f));
-        _renderer = new AdvancedRenderer(120, 35, 2f);
+        _renderer = new AdvancedRenderer(80, 22, 1.5f); // Smaller viewport to prevent console scrolling
         _running = true;
         _lastTime = DateTime.Now;
     }

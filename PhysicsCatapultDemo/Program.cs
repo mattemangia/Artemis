@@ -48,7 +48,7 @@ class Game
         _world = new PhysicsWorld(new Vector2(0, -20f)); // Gravity
         _catapult = new Catapult(new Vector2(5, 5));
         _gameObjects = new List<GameObject>();
-        _renderer = new Renderer(120, 35, 2f);
+        _renderer = new Renderer(80, 22, 1.5f); // Smaller viewport to prevent console scrolling
         _running = true;
         _currentLevel = 1;
         _lastTime = DateTime.Now;

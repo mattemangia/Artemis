@@ -234,12 +234,13 @@ public class LHCRenderer
 
         for (int y = 0; y < _height; y++)
         {
+            Console.SetCursorPosition(0, y);
             for (int x = 0; x < _width; x++)
             {
                 Console.ForegroundColor = _colorBuffer[x, y];
                 Console.Write(_buffer[x, y]);
             }
-            Console.WriteLine();
+            // Don't use WriteLine - use SetCursorPosition to avoid scrolling
         }
 
         Console.ResetColor();
@@ -247,33 +248,19 @@ public class LHCRenderer
 
     public void DrawUI(CollisionExperiment experiment, int particleCount)
     {
-        Console.SetCursorPosition(0, _height + 1);
-        Console.ForegroundColor = ConsoleColor.White;
+        // Draw compact UI status bar at fixed position (avoid scrolling)
+        int uiLine = _height;
 
-        Console.WriteLine("╔══════════════════════════════════════════════════════════════════════════════╗");
-        Console.WriteLine($"║ {experiment.Name,-76} ║");
-        Console.WriteLine("╠══════════════════════════════════════════════════════════════════════════════╣");
+        Console.SetCursorPosition(0, uiLine);
+        Console.ForegroundColor = ConsoleColor.Cyan;
 
         var (b1, b2, avgE) = experiment.Accelerator.GetStatistics();
-        Console.WriteLine($"║ Beam 1: {b1,4} particles | Beam 2: {b2,4} particles | Avg Energy: {avgE,8:F1} GeV  ║");
-        Console.WriteLine($"║ Total Collisions: {experiment.TotalCollisions,6} | Active Particles: {particleCount,6}                    ║");
-        Console.WriteLine($"║ {experiment.GetEnergyReport(),-76} ║");
+        string status = $"B1:{b1,3} B2:{b2,3} | E:{avgE:F0}GeV | Col:{experiment.TotalCollisions,4} | Parts:{particleCount,3}";
+        Console.Write(status.PadRight(_width));
 
-        Console.WriteLine("╠══════════════════════════════════════════════════════════════════════════════╣");
-        Console.WriteLine("║ Detectors:                                                                   ║");
-
-        foreach (var detector in experiment.Detectors.Take(8))
-        {
-            Console.ForegroundColor = detector.Color;
-            Console.Write("║ ");
-            Console.Write($"{detector.GetSummary(),-76}");
-            Console.ForegroundColor = ConsoleColor.White;
-            Console.WriteLine(" ║");
-        }
-
-        Console.WriteLine("╠══════════════════════════════════════════════════════════════════════════════╣");
-        Console.WriteLine("║ Controls: [SPACE] Inject Beams | [C] Clear | [E] Export Data | [Q] Quit      ║");
-        Console.WriteLine("╚══════════════════════════════════════════════════════════════════════════════╝");
+        Console.SetCursorPosition(0, uiLine + 1);
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.Write("[SPACE]Inject [1-3]Types [C]Clear [E]Export [Q]Quit".PadRight(_width));
 
         Console.ResetColor();
     }

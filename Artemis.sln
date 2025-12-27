@@ -11,6 +11,18 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AdvancedPhysicsDemo", "Adva
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ParticleColliderDemo", "ParticleColliderDemo\ParticleColliderDemo.csproj", "{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC945}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Artemis", "src\Artemis\Artemis.csproj", "{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC946}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Artemis.Demo", "src\Artemis.Demo\Artemis.Demo.csproj", "{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC947}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Artemis.Graphics", "Artemis.Graphics\Artemis.Graphics.csproj", "{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC948}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ParticleColliderDemo.OpenTK", "ParticleColliderDemo.OpenTK\ParticleColliderDemo.OpenTK.csproj", "{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC949}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PhysicsCatapultDemo.OpenTK", "PhysicsCatapultDemo.OpenTK\PhysicsCatapultDemo.OpenTK.csproj", "{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC94A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SandTetris3D.OpenTK", "SandTetris3D.OpenTK\SandTetris3D.OpenTK.csproj", "{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC94B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -33,5 +45,29 @@ Global
 		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC945}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC945}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC945}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC946}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC946}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC946}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC946}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC947}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC947}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC947}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC947}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC948}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC948}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC948}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC948}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC949}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC949}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC949}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC949}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC94A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC94A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC94A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC94A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC94B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC94B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC94B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC94B}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

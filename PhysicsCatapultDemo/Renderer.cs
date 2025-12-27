@@ -137,12 +137,13 @@ public class Renderer
 
         for (int y = 0; y < _height; y++)
         {
+            Console.SetCursorPosition(0, y);
             for (int x = 0; x < _width; x++)
             {
                 Console.ForegroundColor = _colorBuffer[y, x];
                 Console.Write(_buffer[y, x]);
             }
-            Console.WriteLine();
+            // Don't use WriteLine - use SetCursorPosition to avoid scrolling
         }
 
         Console.ResetColor();

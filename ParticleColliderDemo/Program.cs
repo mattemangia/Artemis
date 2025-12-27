@@ -28,20 +28,22 @@ class Program
 
     static void RunSimulation()
     {
-        // Setup
+        // Setup - use smaller viewport to prevent console scrolling
         const int WIDTH = 80;
-        const int HEIGHT = 40;
+        const int HEIGHT = 24; // Reduced to fit standard console
         const float DELTA_TIME = 1 / 60f;
+        const float TIME_SCALE = 0.1f; // Slow down simulation for visibility
 
         // Create physics world (no gravity - we're in vacuum!)
         var world = new PhysicsWorld(new Vector2(0, 0));
         world.UseAdvancedSolver = true; // Use Sequential Impulse solver
 
         // Create accelerator (27 units radius, like LHC's 27km)
+        // Lower beam energy for slower, more visible particles
         var accelerator = new Accelerator(
             center: new Vector2(0, 0),
-            radius: 20f,
-            beamEnergy: 100f // 100 GeV
+            radius: 12f, // Smaller radius to fit viewport
+            beamEnergy: 5f // Lower energy for slower particles
         );
 
         // Create experiment
@@ -49,7 +51,7 @@ class Program
 
         // Create renderer
         var renderer = new LHCRenderer(WIDTH, HEIGHT);
-        renderer.SetCamera(new Vector2(0, 0), zoom: 1.5f);
+        renderer.SetCamera(new Vector2(0, 0), zoom: 0.8f); // Adjusted zoom for smaller viewport
 
         // Add magnetic field to world
         world.AddAreaEffector(accelerator.GetMagneticField());
@@ -139,8 +141,8 @@ class Program
                 }
             }
 
-            // Update physics
-            world.Step(DELTA_TIME);
+            // Update physics with time scaling for visibility
+            world.Step(DELTA_TIME * TIME_SCALE);
 
             // Update particles
             var allParticles = world.Bodies
