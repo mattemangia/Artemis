@@ -219,7 +219,7 @@ public class PhysicsWorld
         if (!bodyA.CanCollideWith(bodyB))
             return;
 
-        Collision collision;
+        Collision collision = default;
         bool hasCollision = false;
 
         // Check for CCD (Continuous Collision Detection) for fast-moving objects

@@ -16,6 +16,16 @@ public abstract class AreaEffector
         Radius = radius;
     }
 
+    public bool AffectsBody(RigidBody body)
+    {
+        return IsBodyAffected(body);
+    }
+
+    public void ApplyForce(RigidBody body, float deltaTime)
+    {
+        ApplyEffect(body, deltaTime);
+    }
+
     public abstract void ApplyEffect(RigidBody body, float deltaTime);
 
     protected bool IsBodyAffected(RigidBody body)
@@ -69,6 +79,12 @@ public class DirectionalForceEffector : AreaEffector
     }
 }
 
+public enum RadialFalloff
+{
+    InverseSquare,
+    Linear
+}
+
 /// <summary>
 /// Applies force toward or away from center (gravity well, explosion)
 /// </summary>
@@ -76,12 +92,23 @@ public class RadialForceEffector : AreaEffector
 {
     public float Strength { get; set; }
     public bool IsAttraction { get; set; } = true; // false for repulsion
+    public RadialFalloff Falloff { get; set; } = RadialFalloff.InverseSquare;
 
-    public RadialForceEffector(Vector2 position, float radius, float strength, bool attraction = true)
-        : base(position, radius)
+    public RadialForceEffector(Vector2 center, float radius, float strength, bool attraction = true, RadialFalloff falloff = RadialFalloff.InverseSquare)
+        : base(center, radius)
     {
-        Strength = strength;
-        IsAttraction = attraction;
+        Falloff = falloff;
+
+        if (strength < 0)
+        {
+            Strength = MathF.Abs(strength);
+            IsAttraction = true;
+        }
+        else
+        {
+            Strength = strength;
+            IsAttraction = attraction;
+        }
     }
 
     public override void ApplyEffect(RigidBody body, float deltaTime)
@@ -100,8 +127,11 @@ public class RadialForceEffector : AreaEffector
         if (!IsAttraction)
             direction = -direction;
 
-        // Inverse square falloff like real gravity
-        float forceMagnitude = Strength / (distance * distance + 1.0f);
+        float forceMagnitude = Falloff switch
+        {
+            RadialFalloff.Linear => Strength * GetFalloff(body),
+            _ => Strength / (distance * distance + 1.0f)
+        };
         Vector2 force = direction * forceMagnitude;
 
         body.ApplyForce(force * deltaTime);
