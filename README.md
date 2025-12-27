@@ -27,6 +27,8 @@
 - **Planet Gravity**: Game-scale planets (Mario Galaxy style), N-body systems
 - **Slope Stability**: Rockfall simulation, weathering, precomputed hazard zones
 - **State Transfer**: Bidirectional state capture, time reversal, undo/redo
+- **Force Interaction**: Forces combine, amplify, dampen, or cancel each other
+- **Ray Tracing**: GPU-accelerated mirror reflections, glass refraction, PBR materials
 - **High Performance**: SIMD, multithreading, parallel processing, SoA data layouts
 - **Fluent API**: Intuitive, chainable configuration
 - **Extensible**: Easy to add custom forces, bodies, and behaviors
@@ -2034,6 +2036,239 @@ stateTransfer.ApplyState(loaded, bodies);
 
 ---
 
+## Force Interaction
+
+Forces can interact with each other - combining, amplifying, dampening, or canceling.
+
+### Composite Forces
+
+```csharp
+// Create composite force that combines multiple forces
+var composite = Physics.CreateCompositeForce();
+
+// Add forces
+composite.Add(Physics.CreateGravity());
+composite.Add(Physics.CreateWind(Vector3D.Right, 10));
+composite.Add(Physics.CreateMagnet(center, 100));
+
+// Set interaction rules
+composite.SetRule<WindForce, BuoyancyForce>(ForceBlendMode.Additive);
+composite.SetAmplify<MagneticForce>(factor: 1.5);  // Same-type forces amplify
+composite.SetDampen<GravityForce, BuoyancyForce>(factor: 0.5);  // Opposing forces dampen
+
+// Calculate combined force
+Vector3D totalForce = composite.Calculate(position, velocity, mass);
+```
+
+### Force Interaction System
+
+```csharp
+// Create force interaction system
+var forces = Physics.CreateForceInteractionSystem();
+
+// Add global forces
+forces.AddGlobalForce(Physics.CreateGravity());
+
+// Create force groups
+var windGroup = forces.CreateGroup("wind");
+windGroup.Add(Physics.CreateWind(Vector3D.Right, 5));
+windGroup.Add(Physics.CreateWind(Vector3D.Forward, 3));
+
+var magneticGroup = forces.CreateGroup("magnetic");
+magneticGroup.Add(Physics.CreateMagnet(pos1, 100));
+magneticGroup.Add(Physics.CreateMagnet(pos2, 50));
+
+// Enable interactions
+forces.EnableWindFireInteraction(amplification: 2.0);  // Wind fans flames
+forces.EnableMagneticInterference();  // Opposing magnets cancel
+forces.EnableMultiGravity();  // Multiple gravity sources combine
+
+// Calculate total force at position
+Vector3D total = forces.CalculateTotalForce(position, velocity, mass);
+```
+
+### Blend Modes
+
+```csharp
+// Available blend modes
+ForceBlendMode.Additive     // Add forces together (default)
+ForceBlendMode.Maximum      // Use strongest force only
+ForceBlendMode.Minimum      // Use weakest force only
+ForceBlendMode.Average      // Average all forces
+ForceBlendMode.Multiply     // Multiply forces (for scaling)
+ForceBlendMode.Interference // Opposing forces cancel each other
+ForceBlendMode.Priority     // Higher priority forces override
+```
+
+### Presets
+
+```csharp
+// Weather system (wind + thermal interaction)
+var weather = Physics.CreateWeatherForces();
+weather.GetOrCreateGroup("wind").Add(Physics.CreateStrongWind(Vector3D.Right));
+
+// Space (multi-gravity bodies)
+var space = Physics.CreateSpaceForces();
+space.AddGlobalForce(Physics.CreatePointGravity(sunPos, sunMass));
+space.AddGlobalForce(Physics.CreatePointGravity(planetPos, planetMass));
+
+// Fluid (drag + buoyancy)
+var fluid = Physics.CreateFluidForces();
+
+// Electromagnetic
+var em = Physics.CreateElectromagneticForces();
+```
+
+---
+
+## Ray Tracing
+
+GPU-accelerated ray tracing for mirror reflections, glass refraction, and realistic materials.
+
+### Basic Usage
+
+```csharp
+// Create ray tracing system (auto-detects GPU)
+var rt = Physics.CreateRayTracing();
+
+// Add materials
+int mirrorMat = rt.AddMaterial(Physics.MirrorMaterial());
+int glassMat = rt.AddMaterial(Physics.GlassMaterial());
+int goldMat = rt.AddMaterial(Physics.GoldMaterial());
+
+// Add objects
+rt.AddObject(new TraceableSphere
+{
+    Center = new Vector3(0, 1, 0),
+    Radius = 1.0f,
+    MaterialIndex = mirrorMat
+});
+
+rt.AddObject(new TraceablePlane
+{
+    Center = Vector3.Zero,
+    Normal = Vector3.UnitY,
+    HalfExtents = new Vector2(10, 10),
+    MaterialIndex = goldMat
+});
+
+// Trace single ray
+var color = rt.TraceRay(new Ray(origin, direction));
+
+// Trace full image
+var pixels = rt.TraceImage(
+    width: 1920,
+    height: 1080,
+    cameraPos: new Vector3(0, 2, -5),
+    cameraTarget: Vector3.Zero,
+    cameraUp: Vector3.UnitY,
+    fov: 60f
+);
+
+// Convert to byte array for display
+byte[] imageData = rt.ToByteArray(pixels, exposure: 1.0f);
+```
+
+### Mirror Objects
+
+```csharp
+// Add mirror sphere
+rt.AddMirrorSphere(center: new Vector3(0, 1, 0), radius: 1.0f);
+
+// Add mirror plane (wall mirror)
+rt.AddMirrorPlane(
+    center: new Vector3(0, 2, 5),
+    normal: new Vector3(0, 0, -1),
+    size: new Vector2(4, 3)
+);
+
+// Add mirror box (reflective cube)
+rt.AddMirrorBox(center: new Vector3(2, 0.5f, 0), size: new Vector3(1, 1, 1));
+```
+
+### Materials
+
+```csharp
+// Preset materials
+var mirror = Physics.MirrorMaterial();    // Perfect reflection
+var chrome = Physics.ChromeMaterial();    // Polished metal
+var gold = Physics.GoldMaterial();        // Gold metal
+var copper = Physics.CopperMaterial();    // Copper metal
+var glass = Physics.GlassMaterial();      // Transparent glass
+var water = Physics.WaterMaterial();      // Water surface
+
+// Custom diffuse material
+var redMatte = Physics.DiffuseMaterial(new Vector3(1, 0, 0));
+
+// Custom glossy material
+var blueGlossy = Physics.GlossyMaterial(new Vector3(0, 0, 1), roughness: 0.3f);
+
+// Fully custom material
+var custom = new RayTracingMaterial
+{
+    Albedo = new Vector3(0.8f, 0.2f, 0.1f),  // Color
+    Reflectivity = 0.7f,                       // 0 = diffuse, 1 = mirror
+    Roughness = 0.1f,                          // 0 = smooth, 1 = rough
+    Metalness = 0.5f,                          // 0 = dielectric, 1 = metal
+    Transparency = 0.0f,                       // 0 = opaque, 1 = transparent
+    IOR = 1.5f                                 // Index of refraction
+};
+```
+
+### Lights
+
+```csharp
+// Point light
+var point = Physics.CreatePointLight(
+    position: new Vector3(5, 10, 5),
+    color: new Vector3(1, 1, 1)
+);
+
+// Directional light (sun)
+var sun = Physics.CreateDirectionalLight(
+    direction: new Vector3(-1, -1, -1),
+    color: new Vector3(1, 0.95f, 0.8f)
+);
+
+// Area light (soft shadows)
+var area = Physics.CreateAreaLight(
+    position: new Vector3(0, 5, 0),
+    radius: 2.0f,
+    color: new Vector3(1, 1, 1)
+);
+```
+
+### GPU Backends
+
+```csharp
+// Auto-detect best backend
+var rt = Physics.CreateRayTracing();
+
+// Force specific backend
+var rtOpenCL = Physics.CreateRayTracing(GpuBackend.OpenCL);  // Intel/AMD/NVIDIA
+var rtCUDA = Physics.CreateRayTracing(GpuBackend.CUDA);      // NVIDIA only
+
+// CPU-only (always works)
+var rtCPU = Physics.CreateRayTracingCPU();
+
+// Check device
+Console.WriteLine($"Using: {rt.GpuDevice?.Name}");
+```
+
+### Configuration
+
+```csharp
+var rt = Physics.CreateRayTracing();
+
+// Settings
+rt.MaxBounces = 8;                                    // Reflection depth
+rt.BackgroundColor = new Vector3(0.1f, 0.1f, 0.15f); // Sky color
+rt.AmbientLight = new Vector3(0.1f, 0.1f, 0.1f);     // Ambient lighting
+rt.UseGPU = true;                                     // GPU acceleration
+```
+
+---
+
 ### Modifier System
 
 Manage multiple modifiers together:
@@ -2296,6 +2531,31 @@ void Shoot(Vector3D origin, Vector3D direction)
 | `FlagCloth()` | Flag material (no tearing) |
 | `SailCloth()` | Sail material (high wind resistance) |
 | `CurtainCloth()` | Curtain material |
+| **Force Interaction** | |
+| `CreateForceInteractionSystem()` | Create force interaction manager |
+| `CreateCompositeForce()` | Create composite force with interaction rules |
+| `CreateWeatherForces()` | Weather force preset (wind + thermal) |
+| `CreateSpaceForces()` | Space force preset (multi-gravity) |
+| `CreateFluidForces()` | Fluid force preset (drag + buoyancy) |
+| `CreateElectromagneticForces()` | Electromagnetic force preset |
+| **Ray Tracing** | |
+| `CreateRayTracing()` | Create GPU ray tracing system |
+| `CreateRayTracing(backend)` | Create ray tracing with specific backend |
+| `CreateRayTracingCPU()` | Create CPU-only ray tracing |
+| `MirrorMaterial()` | Perfect mirror material |
+| `ChromeMaterial()` | Chrome/polished metal material |
+| `GoldMaterial()` | Gold material |
+| `CopperMaterial()` | Copper material |
+| `GlassMaterial()` | Glass material (refraction) |
+| `WaterMaterial()` | Water material (refraction) |
+| `DiffuseMaterial(color)` | Diffuse/matte material |
+| `GlossyMaterial(color, roughness)` | Glossy material |
+| `CreateTraceableSphere()` | Create traceable sphere |
+| `CreateTraceablePlane()` | Create traceable plane |
+| `CreateTraceableBox()` | Create traceable box |
+| `CreatePointLight()` | Create point light |
+| `CreateDirectionalLight()` | Create directional light |
+| `CreateAreaLight()` | Create area light (soft shadows) |
 | **Object Pools** | |
 | `CreatePool<T>()` | Create generic object pool |
 | `CreateListPool<T>()` | Create list pool |

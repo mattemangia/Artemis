@@ -13,6 +13,7 @@ global using Artemis.Simulation;
 global using Artemis.Compute;
 global using Artemis.Destruction;
 global using Artemis.Modifiers;
+global using Artemis.Rendering;
 
 namespace Artemis
 {
@@ -1125,6 +1126,212 @@ namespace Artemis
         /// Creates curtain material.
         /// </summary>
         public static ClothMaterial CurtainCloth() => ClothMaterial.Curtain();
+
+        #endregion
+
+        #region Force Interaction
+
+        /// <summary>
+        /// Creates a force interaction system for managing multiple interacting forces.
+        /// </summary>
+        public static ForceInteractionSystem CreateForceInteractionSystem()
+        {
+            return new ForceInteractionSystem();
+        }
+
+        /// <summary>
+        /// Creates a composite force that combines multiple forces with interaction rules.
+        /// </summary>
+        public static CompositeForce CreateCompositeForce()
+        {
+            return new CompositeForce();
+        }
+
+        /// <summary>
+        /// Creates a weather force interaction preset.
+        /// </summary>
+        public static ForceInteractionSystem CreateWeatherForces()
+        {
+            return ForceInteractionSystem.Presets.Weather();
+        }
+
+        /// <summary>
+        /// Creates a space force interaction preset (multi-gravity).
+        /// </summary>
+        public static ForceInteractionSystem CreateSpaceForces()
+        {
+            return ForceInteractionSystem.Presets.Space();
+        }
+
+        /// <summary>
+        /// Creates a fluid force interaction preset.
+        /// </summary>
+        public static ForceInteractionSystem CreateFluidForces()
+        {
+            return ForceInteractionSystem.Presets.Fluid();
+        }
+
+        /// <summary>
+        /// Creates an electromagnetic force interaction preset.
+        /// </summary>
+        public static ForceInteractionSystem CreateElectromagneticForces()
+        {
+            return ForceInteractionSystem.Presets.Electromagnetic();
+        }
+
+        #endregion
+
+        #region Ray Tracing
+
+        /// <summary>
+        /// Creates a GPU-accelerated ray tracing system for mirror reflections.
+        /// </summary>
+        public static RayTracingSystem CreateRayTracing()
+        {
+            var rt = new RayTracingSystem();
+            rt.Initialize();
+            return rt;
+        }
+
+        /// <summary>
+        /// Creates a ray tracing system with a specific GPU backend.
+        /// </summary>
+        public static RayTracingSystem CreateRayTracing(GpuBackend backend)
+        {
+            var rt = new RayTracingSystem();
+            rt.Initialize(backend);
+            return rt;
+        }
+
+        /// <summary>
+        /// Creates a CPU-only ray tracing system.
+        /// </summary>
+        public static RayTracingSystem CreateRayTracingCPU()
+        {
+            var rt = new RayTracingSystem { UseGPU = false };
+            rt.Initialize();
+            return rt;
+        }
+
+        /// <summary>
+        /// Creates a perfect mirror material for ray tracing.
+        /// </summary>
+        public static RayTracingMaterial MirrorMaterial() => RayTracingMaterial.Mirror();
+
+        /// <summary>
+        /// Creates a chrome material for ray tracing.
+        /// </summary>
+        public static RayTracingMaterial ChromeMaterial() => RayTracingMaterial.Chrome();
+
+        /// <summary>
+        /// Creates a gold material for ray tracing.
+        /// </summary>
+        public static RayTracingMaterial GoldMaterial() => RayTracingMaterial.Gold();
+
+        /// <summary>
+        /// Creates a copper material for ray tracing.
+        /// </summary>
+        public static RayTracingMaterial CopperMaterial() => RayTracingMaterial.Copper();
+
+        /// <summary>
+        /// Creates a glass material for ray tracing.
+        /// </summary>
+        public static RayTracingMaterial GlassMaterial() => RayTracingMaterial.Glass();
+
+        /// <summary>
+        /// Creates a water material for ray tracing.
+        /// </summary>
+        public static RayTracingMaterial WaterMaterial() => RayTracingMaterial.Water();
+
+        /// <summary>
+        /// Creates a diffuse material for ray tracing.
+        /// </summary>
+        public static RayTracingMaterial DiffuseMaterial(System.Numerics.Vector3 color)
+            => RayTracingMaterial.Diffuse(color);
+
+        /// <summary>
+        /// Creates a glossy material for ray tracing.
+        /// </summary>
+        public static RayTracingMaterial GlossyMaterial(System.Numerics.Vector3 color, float roughness = 0.3f)
+            => RayTracingMaterial.Glossy(color, roughness);
+
+        /// <summary>
+        /// Creates a traceable sphere for ray tracing.
+        /// </summary>
+        public static TraceableSphere CreateTraceableSphere(System.Numerics.Vector3 center, float radius, int materialIndex = 0)
+        {
+            return new TraceableSphere
+            {
+                Center = center,
+                Radius = radius,
+                MaterialIndex = materialIndex
+            };
+        }
+
+        /// <summary>
+        /// Creates a traceable plane for ray tracing.
+        /// </summary>
+        public static TraceablePlane CreateTraceablePlane(
+            System.Numerics.Vector3 center,
+            System.Numerics.Vector3 normal,
+            System.Numerics.Vector2 size,
+            int materialIndex = 0)
+        {
+            return new TraceablePlane
+            {
+                Center = center,
+                Normal = System.Numerics.Vector3.Normalize(normal),
+                HalfExtents = size * 0.5f,
+                MaterialIndex = materialIndex
+            };
+        }
+
+        /// <summary>
+        /// Creates a traceable box for ray tracing.
+        /// </summary>
+        public static TraceableBox CreateTraceableBox(
+            System.Numerics.Vector3 center,
+            System.Numerics.Vector3 size,
+            int materialIndex = 0)
+        {
+            return new TraceableBox
+            {
+                Center = center,
+                HalfExtents = size * 0.5f,
+                MaterialIndex = materialIndex
+            };
+        }
+
+        /// <summary>
+        /// Creates a point light for ray tracing.
+        /// </summary>
+        public static RayTracingLight CreatePointLight(
+            System.Numerics.Vector3 position,
+            System.Numerics.Vector3 color)
+        {
+            return RayTracingLight.Point(position, color);
+        }
+
+        /// <summary>
+        /// Creates a directional light for ray tracing.
+        /// </summary>
+        public static RayTracingLight CreateDirectionalLight(
+            System.Numerics.Vector3 direction,
+            System.Numerics.Vector3 color)
+        {
+            return RayTracingLight.Directional(direction, color);
+        }
+
+        /// <summary>
+        /// Creates an area light for ray tracing (soft shadows).
+        /// </summary>
+        public static RayTracingLight CreateAreaLight(
+            System.Numerics.Vector3 position,
+            float radius,
+            System.Numerics.Vector3 color)
+        {
+            return RayTracingLight.Area(position, radius, color);
+        }
 
         #endregion
     }
