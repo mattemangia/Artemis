@@ -5,6 +5,7 @@ using OpenTK.Windowing.Desktop;
 using OpenTK.Windowing.GraphicsLibraryFramework;
 using Artemis.Demo;
 using Artemis.Core;
+using Artemis.Physics2D;
 
 namespace SandTetris3D.OpenTK;
 
@@ -12,8 +13,8 @@ class Program
 {
     static void Main(string[] args)
     {
-        Console.WriteLine("=== Sand Tetris 3D - OpenTK Edition ===");
-        Console.WriteLine("A 3D physics-based puzzle game");
+        Console.WriteLine("=== Sand Tetris 3D - OpenTK Edition (Block Mode) ===");
+        Console.WriteLine("A 3D physics-based puzzle game with Blocks");
 
         var settings = new NativeWindowSettings()
         {
@@ -49,12 +50,6 @@ public class SandTetrisWindow : GameWindow
 
     // Shaders
     private int _shaderProgram;
-    private int _sphereVao;
-    private int _sphereVbo;
-    private int _sphereEbo;
-    private int _sphereIndexCount;
-
-    // Cube for terrarium walls
     private int _cubeVao;
     private int _cubeVbo;
 
@@ -81,10 +76,7 @@ public class SandTetrisWindow : GameWindow
         // Create shaders
         CreateShaders();
 
-        // Create sphere geometry for particles
-        CreateSphere();
-
-        // Create cube for terrarium walls
+        // Create cube geometry (reused for walls and blocks)
         CreateCube();
     }
 
@@ -170,79 +162,6 @@ public class SandTetrisWindow : GameWindow
         GL.DeleteShader(fragmentShader);
     }
 
-    private void CreateSphere()
-    {
-        const int stacks = 12;
-        const int slices = 16;
-
-        List<float> vertices = new();
-        List<uint> indices = new();
-
-        for (int i = 0; i <= stacks; i++)
-        {
-            float phi = MathF.PI * i / stacks;
-            for (int j = 0; j <= slices; j++)
-            {
-                float theta = 2 * MathF.PI * j / slices;
-
-                float x = MathF.Sin(phi) * MathF.Cos(theta);
-                float y = MathF.Cos(phi);
-                float z = MathF.Sin(phi) * MathF.Sin(theta);
-
-                // Position
-                vertices.Add(x);
-                vertices.Add(y);
-                vertices.Add(z);
-
-                // Normal (same as position for unit sphere)
-                vertices.Add(x);
-                vertices.Add(y);
-                vertices.Add(z);
-            }
-        }
-
-        for (int i = 0; i < stacks; i++)
-        {
-            for (int j = 0; j < slices; j++)
-            {
-                uint a = (uint)(i * (slices + 1) + j);
-                uint b = (uint)(a + slices + 1);
-
-                indices.Add(a);
-                indices.Add(b);
-                indices.Add(a + 1);
-
-                indices.Add(b);
-                indices.Add(b + 1);
-                indices.Add(a + 1);
-            }
-        }
-
-        _sphereVao = GL.GenVertexArray();
-        _sphereVbo = GL.GenBuffer();
-        _sphereEbo = GL.GenBuffer();
-
-        GL.BindVertexArray(_sphereVao);
-
-        GL.BindBuffer(BufferTarget.ArrayBuffer, _sphereVbo);
-        GL.BufferData(BufferTarget.ArrayBuffer, vertices.Count * sizeof(float),
-            vertices.ToArray(), BufferUsageHint.StaticDraw);
-
-        GL.BindBuffer(BufferTarget.ElementArrayBuffer, _sphereEbo);
-        GL.BufferData(BufferTarget.ElementArrayBuffer, indices.Count * sizeof(uint),
-            indices.ToArray(), BufferUsageHint.StaticDraw);
-
-        GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), 0);
-        GL.EnableVertexAttribArray(0);
-
-        GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), 3 * sizeof(float));
-        GL.EnableVertexAttribArray(1);
-
-        _sphereIndexCount = indices.Count;
-
-        GL.BindVertexArray(0);
-    }
-
     private void CreateCube()
     {
         float[] vertices = {
@@ -257,6 +176,26 @@ public class SandTetrisWindow : GameWindow
              0.5f, -0.5f, -0.5f,  0f, 0f, -1f,
              0.5f,  0.5f, -0.5f,  0f, 0f, -1f,
             -0.5f,  0.5f, -0.5f,  0f, 0f, -1f,
+            // Left face
+            -0.5f,  0.5f,  0.5f, -1f, 0f, 0f,
+            -0.5f,  0.5f, -0.5f, -1f, 0f, 0f,
+            -0.5f, -0.5f, -0.5f, -1f, 0f, 0f,
+            -0.5f, -0.5f,  0.5f, -1f, 0f, 0f,
+            // Right face
+             0.5f,  0.5f,  0.5f,  1f, 0f, 0f,
+             0.5f,  0.5f, -0.5f,  1f, 0f, 0f,
+             0.5f, -0.5f, -0.5f,  1f, 0f, 0f,
+             0.5f, -0.5f,  0.5f,  1f, 0f, 0f,
+             // Top face
+            -0.5f,  0.5f, -0.5f,  0f, 1f, 0f,
+             0.5f,  0.5f, -0.5f,  0f, 1f, 0f,
+             0.5f,  0.5f,  0.5f,  0f, 1f, 0f,
+            -0.5f,  0.5f,  0.5f,  0f, 1f, 0f,
+             // Bottom face
+            -0.5f, -0.5f, -0.5f,  0f, -1f, 0f,
+             0.5f, -0.5f, -0.5f,  0f, -1f, 0f,
+             0.5f, -0.5f,  0.5f,  0f, -1f, 0f,
+            -0.5f, -0.5f,  0.5f,  0f, -1f, 0f,
         };
 
         _cubeVao = GL.GenVertexArray();
@@ -321,15 +260,12 @@ public class SandTetrisWindow : GameWindow
         if (!_waitingForSettle && !_game.IsGameOver)
         {
             // Convert mouse position to drop coordinates
-            // Map screen X (0 to Width) to drop X (-4.5 to 4.5)
-            // Map screen Y (0 to Height) to drop Z (-0.8 to 0.8)
             float normalizedX = mousePos.X / Size.X;  // 0 to 1
             float normalizedY = mousePos.Y / Size.Y;  // 0 to 1
 
             _dropX = (normalizedX - 0.5) * 9.0;  // -4.5 to 4.5
-            _dropZ = (normalizedY - 0.5) * 1.6;  // -0.8 to 0.8
+            _dropZ = 0; // Fixed Z for 2D logic
             _dropX = Math.Clamp(_dropX, -4.5, 4.5);
-            _dropZ = Math.Clamp(_dropZ, -0.8, 0.8);
 
             // Left click to drop ball
             if (MouseState.IsButtonPressed(MouseButton.Left))
@@ -348,10 +284,6 @@ public class SandTetrisWindow : GameWindow
                 _dropX = Math.Max(_dropX - moveStep, -4.5);
             if (KeyboardState.IsKeyDown(Keys.Right))
                 _dropX = Math.Min(_dropX + moveStep, 4.5);
-            if (KeyboardState.IsKeyDown(Keys.Up))
-                _dropZ = Math.Max(_dropZ - moveStep, -0.8);
-            if (KeyboardState.IsKeyDown(Keys.Down))
-                _dropZ = Math.Min(_dropZ + moveStep, 0.8);
 
             // Space to drop ball (keyboard fallback)
             if (KeyboardState.IsKeyPressed(Keys.Space) && !_game.IsGameOver)
@@ -407,8 +339,8 @@ public class SandTetrisWindow : GameWindow
             ? (_game.IsVictory ? " [VICTORY!]" : " [GAME OVER]")
             : (_waitingForSettle ? " [Settling...]" : "");
 
-        Title = $"Sand Tetris 3D | Turn: {_game.Turn} | Score: {_game.Score} | " +
-                $"Grains: {_game.ActiveParticleCount} | " +
+        Title = $"Sand Tetris 3D (Blocks) | Turn: {_game.Turn} | Score: {_game.Score} | " +
+                $"Blocks: {_game.ActiveParticleCount} | " +
                 $"Ball: {_game.CurrentBall.ColorName} ({_game.CurrentBall.Radius:F1}){status} | " +
                 "[Mouse]Aim [LClick]Drop [RDrag]Rotate [R]Reset";
     }
@@ -439,17 +371,14 @@ public class SandTetrisWindow : GameWindow
         // Draw terrarium
         DrawTerrarium();
 
-        // Draw particles
-        DrawParticles();
+        // Draw particles/blocks
+        DrawBlocks();
 
         // Draw drop indicator
         if (!_waitingForSettle && !_game.IsGameOver)
         {
             DrawDropIndicator();
         }
-
-        // Draw next ball preview
-        DrawNextBallPreview();
 
         SwapBuffers();
     }
@@ -465,10 +394,10 @@ public class SandTetrisWindow : GameWindow
         GL.Uniform1(GL.GetUniformLocation(_shaderProgram, "shineProgress"), 0f);
 
         GL.BindVertexArray(_cubeVao);
-        GL.DrawArrays(PrimitiveType.TriangleFan, 0, 4);
-        GL.DrawArrays(PrimitiveType.TriangleFan, 4, 4);
+        GL.DrawArrays(PrimitiveType.TriangleFan, 0, 4); // Top
+        GL.DrawArrays(PrimitiveType.TriangleFan, 16, 4); // Bottom? Cube has 24 vertices
 
-        // Draw walls (wireframe style - just outline)
+        // Draw walls (wireframe style)
         GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Line);
         GL.LineWidth(2f);
 
@@ -477,59 +406,83 @@ public class SandTetrisWindow : GameWindow
         GL.UniformMatrix4(GL.GetUniformLocation(_shaderProgram, "model"), false, ref wallsModel);
         GL.Uniform3(GL.GetUniformLocation(_shaderProgram, "objectColor"), 0.4f, 0.5f, 0.6f);
 
-        GL.BindVertexArray(_cubeVao);
-        GL.DrawArrays(PrimitiveType.LineLoop, 0, 4);
-        GL.DrawArrays(PrimitiveType.LineLoop, 4, 4);
+        // Draw 12 lines of the cube
+        GL.DrawArrays(PrimitiveType.Lines, 0, 24); // Not efficient but works if lines are defined
+        // Actually CreateCube uses TRIANGLES (via DrawArrays or ElementBuffer?)
+        // The CreateCube above uses raw vertices without indices. 6 faces * 4 vertices = 24.
+        // Wait, CreateCube above has 24 vertices (4 per face, 6 faces).
+        // GL_TRIANGLE_FAN for each face? No, CreateCube didn't set up Triangle Fans correctly for all faces in one go.
+        // It's 4 vertices per face.
+
+        // Re-draw as lines:
+        for (int i = 0; i < 6; i++)
+        {
+            GL.DrawArrays(PrimitiveType.LineLoop, i * 4, 4);
+        }
 
         GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
     }
 
-    private void DrawParticles()
+    private void DrawBlocks()
     {
-        GL.BindVertexArray(_sphereVao);
+        GL.BindVertexArray(_cubeVao);
 
         int shineProgressLoc = GL.GetUniformLocation(_shaderProgram, "shineProgress");
         int colorLoc = GL.GetUniformLocation(_shaderProgram, "objectColor");
         int modelLoc = GL.GetUniformLocation(_shaderProgram, "model");
 
-        var particles = _game.Simulation.Particles;
-        float radius = (float)_game.Simulation.ParticleRadius;
+        var bodies = _game.World.Bodies;
+        float depth = (float)_game.GetTerrariumSize().depth;
 
-        for (int i = 0; i < particles.Count; i++)
+        for (int i = 0; i < bodies.Count; i++)
         {
-            var particle = particles[i];
-            if (!particle.IsActive) continue;
+            var body = bodies[i];
+            if (!body.IsActive || body.BodyType == BodyType2D.Static) continue;
 
-            // Get color
-            var (r, g, b) = Artemis.Demo.SandTetris3D.GetRGB(particle.Color);
-            uint color = particle.Color;
+            uint color = (body.UserData is uint c) ? c : 0xFFFFFFFF;
 
-            // Check if shining
+            // Check shine
             float shineProgress = 0f;
-            if (_game.ShiningParticles.TryGetValue(i, out float progress))
+            if (_game.ShiningBodies.TryGetValue(body.Id, out float progress))
             {
                 shineProgress = progress;
-                color = _game.GetShineColor(i, particle.Color);
-                (r, g, b) = Artemis.Demo.SandTetris3D.GetRGB(color);
+                color = _game.GetShineColor(color, progress);
             }
+
+            var (r, g, b) = Artemis.Demo.SandTetris3D.GetRGB(color);
 
             GL.Uniform1(shineProgressLoc, shineProgress);
             GL.Uniform3(colorLoc, r / 255f, g / 255f, b / 255f);
 
-            Matrix4 model = Matrix4.CreateScale(radius) *
-                           Matrix4.CreateTranslation(
-                               (float)particle.Position.X,
-                               (float)particle.Position.Y,
-                               (float)particle.Position.Z);
+            // Get dimensions from shape
+            float width = 1.0f, height = 1.0f;
+            if (body.Shape is Artemis.Physics2D.BoxShape box)
+            {
+                width = (float)box.Width;
+                height = (float)box.Height;
+            }
+
+            Matrix4 model = Matrix4.CreateScale(width, height, depth) *
+                            Matrix4.CreateRotationZ((float)body.Rotation) *
+                            Matrix4.CreateTranslation(
+                               (float)body.Position.X,
+                               (float)body.Position.Y,
+                               0); // Z is 0 centered
+
             GL.UniformMatrix4(modelLoc, false, ref model);
 
-            GL.DrawElements(PrimitiveType.Triangles, _sphereIndexCount, DrawElementsType.UnsignedInt, 0);
+            // Draw cube (6 faces, 4 vertices each = 24 vertices)
+            // Using TriangleFan for each face
+            for (int f = 0; f < 6; f++)
+            {
+                GL.DrawArrays(PrimitiveType.TriangleFan, f * 4, 4);
+            }
         }
     }
 
     private void DrawDropIndicator()
     {
-        // Draw a wireframe sphere at drop position
+        // Draw a wireframe sphere/box at drop position
         GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Line);
 
         var ball = _game.CurrentBall;
@@ -538,35 +491,22 @@ public class SandTetrisWindow : GameWindow
         GL.Uniform3(GL.GetUniformLocation(_shaderProgram, "objectColor"), r / 255f, g / 255f, b / 255f);
         GL.Uniform1(GL.GetUniformLocation(_shaderProgram, "shineProgress"), 0f);
 
-        Matrix4 model = Matrix4.CreateScale((float)ball.Radius) *
-                       Matrix4.CreateTranslation((float)_dropX, 14f, (float)_dropZ);
+        // Represent the drop area
+        float radius = (float)ball.Radius;
+        float depth = (float)_game.GetTerrariumSize().depth;
+
+        Matrix4 model = Matrix4.CreateScale(radius * 2, radius * 2, depth) *
+                       Matrix4.CreateTranslation((float)_dropX, 14f, 0);
         GL.UniformMatrix4(GL.GetUniformLocation(_shaderProgram, "model"), false, ref model);
 
-        GL.BindVertexArray(_sphereVao);
-        GL.DrawElements(PrimitiveType.Triangles, _sphereIndexCount, DrawElementsType.UnsignedInt, 0);
+        GL.BindVertexArray(_cubeVao);
+        for (int f = 0; f < 6; f++)
+        {
+            GL.DrawArrays(PrimitiveType.LineLoop, f * 4, 4);
+        }
 
         // Draw drop line
         GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
-    }
-
-    private void DrawNextBallPreview()
-    {
-        // Draw the next ball floating above the terrarium
-        var ball = _game.CurrentBall;
-        var (r, g, b) = Artemis.Demo.SandTetris3D.GetRGB(ball.Color);
-
-        GL.Uniform3(GL.GetUniformLocation(_shaderProgram, "objectColor"), r / 255f, g / 255f, b / 255f);
-        GL.Uniform1(GL.GetUniformLocation(_shaderProgram, "shineProgress"), 0f);
-
-        // Animate the preview ball
-        float bob = MathF.Sin((float)GLFW.GetTime() * 2f) * 0.3f;
-
-        Matrix4 model = Matrix4.CreateScale((float)ball.Radius * 0.5f) *
-                       Matrix4.CreateTranslation(-6f, 12f + bob, 0);
-        GL.UniformMatrix4(GL.GetUniformLocation(_shaderProgram, "model"), false, ref model);
-
-        GL.BindVertexArray(_sphereVao);
-        GL.DrawElements(PrimitiveType.Triangles, _sphereIndexCount, DrawElementsType.UnsignedInt, 0);
     }
 
     protected override void OnResize(ResizeEventArgs e)
@@ -577,9 +517,6 @@ public class SandTetrisWindow : GameWindow
 
     protected override void OnUnload()
     {
-        GL.DeleteVertexArray(_sphereVao);
-        GL.DeleteBuffer(_sphereVbo);
-        GL.DeleteBuffer(_sphereEbo);
         GL.DeleteVertexArray(_cubeVao);
         GL.DeleteBuffer(_cubeVbo);
         GL.DeleteProgram(_shaderProgram);

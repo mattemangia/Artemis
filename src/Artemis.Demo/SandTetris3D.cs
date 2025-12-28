@@ -1,25 +1,20 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using Artemis;
 using Artemis.Core;
-using Artemis.Particles;
+using Artemis.Physics2D;
+using Artemis.Materials;
 
 namespace Artemis.Demo
 {
     /// <summary>
-    /// Sand Tetris 3D - A physics-based puzzle game using Artemis Physics Engine.
+    /// Sand Tetris 3D - A physics-based puzzle game using Artemis Physics Engine (2D Physics Logic).
     ///
-    /// Gameplay:
-    /// - Each turn, you receive a sand ball of random size and color
-    /// - Choose where to drop it (X and Z coordinates)
-    /// - Sand falls, rolls, and spreads according to physics
-    /// - If sand of the same color connects from one side to the other, it disappears
-    /// - You lose if the terrarium fills up
-    /// - You win if you create a hole at the bottom
-    ///
-    /// The terrarium is THIN (not a 3D cube) to make it playable for humans.
-    /// A full 3D Tetris would be too difficult.
+    /// The user requested "parallelepipeds or small cubes with the depth of the sandbox".
+    /// This is implemented using a 2D PhysicsWorld but rendering the 2D shapes as 3D blocks
+    /// spanning the full depth of the terrarium.
     /// </summary>
     public class SandTetris3D
     {
@@ -27,32 +22,31 @@ namespace Artemis.Demo
 
         private const double TerrariumWidth = 10.0;
         private const double TerrariumHeight = 15.0;
-        private const double TerrariumDepth = 2.5;  // THIN terrarium for playability
+        private const double TerrariumDepth = 2.5;  // Rendered depth
         private const double MinBallRadius = 0.4;
         private const double MaxBallRadius = 1.2;
-        private const double ParticleRadius = 0.06;  // Smaller particles = more grains per ball
+        private const double BlockSize = 0.35; // Size of the cubes/parallelepipeds
         private const int ScorePerClear = 100;
         private const int BonusPerChain = 50;
-        private const float ShineAnimationDuration = 1.5f;  // Seconds before layer disappears
+        private const float ShineAnimationDuration = 1.5f;
 
         #endregion
 
         #region Fields
 
-        private readonly SandSimulation _simulation;
+        private readonly PhysicsWorld2D _world;
         private readonly Random _random;
         private readonly uint[] _colors;
         private readonly Stopwatch _performanceTimer;
         private int _score;
         private int _turn;
-        private int _lastGroupId;
         private bool _gameOver;
         private bool _victory;
         private SandBallInfo _currentBall;
 
-        // Shining layer animation
-        private readonly Dictionary<int, float> _shiningParticles;
-        private readonly HashSet<int> _particlesToRemove;
+        // Shining animation for cleared blocks
+        private readonly Dictionary<string, float> _shiningBodies;
+        private readonly HashSet<string> _bodiesToRemove;
 
         // Performance tracking
         private double _lastUpdateTimeMs;
@@ -63,104 +57,46 @@ namespace Artemis.Demo
 
         #region Properties
 
-        /// <summary>
-        /// Gets the current score.
-        /// </summary>
         public int Score => _score;
-
-        /// <summary>
-        /// Gets the current turn number.
-        /// </summary>
         public int Turn => _turn;
-
-        /// <summary>
-        /// Gets whether the game is over.
-        /// </summary>
         public bool IsGameOver => _gameOver;
-
-        /// <summary>
-        /// Gets whether the player has won.
-        /// </summary>
         public bool IsVictory => _victory;
-
-        /// <summary>
-        /// Gets the current sand ball to drop.
-        /// </summary>
         public SandBallInfo CurrentBall => _currentBall;
 
-        /// <summary>
-        /// Gets the simulation.
-        /// </summary>
-        public SandSimulation Simulation => _simulation;
+        // Expose the PhysicsWorld2D for rendering
+        public PhysicsWorld2D World => _world;
 
-        /// <summary>
-        /// Gets the terrarium bounds.
-        /// </summary>
-        public AABB TerrariumBounds => _simulation.Bounds;
+        public int ActiveParticleCount => _world.Bodies.Count(b => b.BodyType == BodyType2D.Dynamic);
 
-        /// <summary>
-        /// Gets the current particle count (real-time grain counter).
-        /// </summary>
-        public int ParticleCount => _simulation.ParticleCount;
-
-        /// <summary>
-        /// Gets the active particle count.
-        /// </summary>
-        public int ActiveParticleCount => _simulation.ActiveParticleCount;
-
-        /// <summary>
-        /// Gets the last update time in milliseconds.
-        /// </summary>
         public double LastUpdateTimeMs => _lastUpdateTimeMs;
-
-        /// <summary>
-        /// Gets the average update time in milliseconds.
-        /// </summary>
         public double AverageUpdateTimeMs => _averageUpdateTimeMs;
+        public string PerformanceStats => $"Blocks: {ActiveParticleCount} | Update: {_lastUpdateTimeMs:F1}ms | Avg: {_averageUpdateTimeMs:F1}ms";
+        public string GrainCounterDialog => $"Blocks: {ActiveParticleCount:N0}";
 
-        /// <summary>
-        /// Gets particles that are currently shining (about to disappear).
-        /// Key is particle index, value is shine progress (0-1).
-        /// </summary>
-        public IReadOnlyDictionary<int, float> ShiningParticles => _shiningParticles;
-
-        /// <summary>
-        /// Gets performance stats as a formatted string.
-        /// </summary>
-        public string PerformanceStats => $"Grains: {ActiveParticleCount} | Update: {_lastUpdateTimeMs:F1}ms | Avg: {_averageUpdateTimeMs:F1}ms";
-
-        /// <summary>
-        /// Gets the grain counter dialog text.
-        /// </summary>
-        public string GrainCounterDialog => $"Sand Grains: {ActiveParticleCount:N0}";
+        // Helper to expose shining bodies to renderer
+        public IReadOnlyDictionary<string, float> ShiningBodies => _shiningBodies;
 
         #endregion
 
         #region Constructor
 
-        /// <summary>
-        /// Creates a new Sand Tetris 3D game.
-        /// </summary>
-        /// <param name="startWithRandomTopography">If true, starts with random disconnected sand layers.</param>
         public SandTetris3D(bool startWithRandomTopography = true)
         {
-            var bounds = new AABB(
-                new Vector3D(-TerrariumWidth / 2, 0, -TerrariumDepth / 2),
-                new Vector3D(TerrariumWidth / 2, TerrariumHeight, TerrariumDepth / 2)
-            );
+            // Initialize 2D world
+            _world = Physics.CreateWorld2D();
+            _world.Gravity = new Artemis.Physics2D.Vector2D(0, -9.81);
+            _world.VelocityIterations = 6;
+            _world.PositionIterations = 3;
 
-            _simulation = Physics.CreateSandSimulation(bounds, ParticleRadius * 2.5);
-            _simulation.ParticleRadius = ParticleRadius;
-            _simulation.Friction = 0.35;      // Slightly less friction for better flow
-            _simulation.Restitution = 0.08;   // Lower bounce for stability
+            // Create container walls
+            CreateContainer();
 
             _random = new Random();
-            _lastGroupId = 0;
             _performanceTimer = new Stopwatch();
-            _shiningParticles = new Dictionary<int, float>();
-            _particlesToRemove = new HashSet<int>();
+            _shiningBodies = new Dictionary<string, float>();
+            _bodiesToRemove = new HashSet<string>();
 
-            // Define 6 distinct colors (ARGB format)
+            // Define colors
             _colors = new uint[]
             {
                 0xFFFF4444, // Red
@@ -175,8 +111,6 @@ namespace Artemis.Demo
             _turn = 0;
             _gameOver = false;
             _victory = false;
-            _updateCount = 0;
-            _averageUpdateTimeMs = 0;
 
             if (startWithRandomTopography)
             {
@@ -186,99 +120,65 @@ namespace Artemis.Demo
             GenerateNextBall();
         }
 
+        private void CreateContainer()
+        {
+            // Floor
+            var floor = Physics.CreateStaticBox2D(
+                new Artemis.Physics2D.Vector2D(0, -0.5),
+                TerrariumWidth,
+                1.0);
+            floor.Friction = 0.5;
+            _world.AddBody(floor);
+
+            // Left Wall
+            var leftWall = Physics.CreateStaticBox2D(
+                new Artemis.Physics2D.Vector2D(-TerrariumWidth / 2 - 0.5, TerrariumHeight / 2),
+                1.0,
+                TerrariumHeight + 2.0);
+            leftWall.Friction = 0.1;
+            _world.AddBody(leftWall);
+
+            // Right Wall
+            var rightWall = Physics.CreateStaticBox2D(
+                new Artemis.Physics2D.Vector2D(TerrariumWidth / 2 + 0.5, TerrariumHeight / 2),
+                1.0,
+                TerrariumHeight + 2.0);
+            rightWall.Friction = 0.1;
+            _world.AddBody(rightWall);
+        }
+
         #endregion
 
         #region Random Topography
 
-        /// <summary>
-        /// Generates random disconnected sand layers as starting topography.
-        /// These create opportunities for connections without making the game too easy.
-        /// </summary>
         private void GenerateRandomTopography()
         {
-            // Fill the bottom 45% with wavy layers to avoid early victory
-            double fillHeight = TerrariumHeight * 0.45;
-            double spacing = ParticleRadius * 2.1; // Slightly loose packing to allow settling
+            // Fill bottom 40% with random blocks
+            double fillHeight = TerrariumHeight * 0.4;
+            int rows = (int)(fillHeight / BlockSize);
+            int cols = (int)(TerrariumWidth / BlockSize);
 
-            // Wave parameters
-            double frequencyX = 0.5;
-            double frequencyZ = 0.8;
-            double amplitude = 1.0;
-            double layerThickness = 2.0; // Height of each color band
+            double startX = -TerrariumWidth / 2 + BlockSize / 2;
+            double startY = BlockSize / 2;
 
-            int countX = (int)(TerrariumWidth / spacing);
-            int countY = (int)(fillHeight / spacing);
-            int countZ = (int)(TerrariumDepth / spacing);
-
-            // Center offsets to center the grid
-            double startX = -(countX * spacing) / 2.0 + spacing / 2.0;
-            double startZ = -(countZ * spacing) / 2.0 + spacing / 2.0;
-
-            for (int iy = 0; iy < countY; iy++)
+            for (int r = 0; r < rows; r++)
             {
-                double y = iy * spacing + ParticleRadius;
-
-                for (int ix = 0; ix < countX; ix++)
+                for (int c = 0; c < cols; c++)
                 {
-                    double x = startX + ix * spacing;
+                    // Sine wave pattern
+                    double x = startX + c * BlockSize;
+                    double waveHeight = Math.Sin(x * 0.5) * 2.0 + 2.0;
 
-                    for (int iz = 0; iz < countZ; iz++)
+                    if (r * BlockSize < waveHeight)
                     {
-                        double z = startZ + iz * spacing;
-
-                        // Calculate wavy coordinate for coloring
-                        // We use the wave to shift the "effective" y coordinate for color lookup
-                        double wavyY = y + amplitude * Math.Sin(x * frequencyX) + amplitude * 0.5 * Math.Cos(z * frequencyZ);
-
-                        // Ensure positive index
-                        int colorIndex = (int)(Math.Abs(wavyY) / layerThickness) % _colors.Length;
-                        uint color = _colors[colorIndex];
-
-                        // Add some randomness to position to prevent perfect stacking artifacts
-                        double jitter = ParticleRadius * 0.1;
-                        double px = x + (_random.NextDouble() - 0.5) * jitter;
-                        double py = y + (_random.NextDouble() - 0.5) * jitter;
-                        double pz = z + (_random.NextDouble() - 0.5) * jitter;
-
-                        _simulation.AddParticle(new Vector3D(px, py, pz), color, ParticleRadius);
-                    }
-                }
-            }
-
-            // Let the initial topography settle briefly
-            for (int i = 0; i < 20; i++)
-            {
-                _simulation.Update(0.02);
-            }
-        }
-
-        /// <summary>
-        /// Adds a rectangular layer of sand.
-        /// </summary>
-        private void AddSandLayer(Vector3D center, double width, double height, double depth, uint color)
-        {
-            double spacing = ParticleRadius * 2.2;
-
-            int countX = (int)(width / spacing);
-            int countY = (int)(height / spacing);
-            int countZ = (int)(depth / spacing);
-
-            for (int ix = 0; ix < countX; ix++)
-            {
-                for (int iy = 0; iy < countY; iy++)
-                {
-                    for (int iz = 0; iz < countZ; iz++)
-                    {
-                        double px = center.X - width / 2 + ix * spacing + spacing / 2;
-                        double py = center.Y - height / 2 + iy * spacing + spacing / 2;
-                        double pz = center.Z - depth / 2 + iz * spacing + spacing / 2;
-
-                        // Add small random offset for natural look
-                        px += (_random.NextDouble() - 0.5) * ParticleRadius * 0.3;
-                        py += (_random.NextDouble() - 0.5) * ParticleRadius * 0.3;
-                        pz += (_random.NextDouble() - 0.5) * ParticleRadius * 0.3;
-
-                        _simulation.AddParticle(new Vector3D(px, py, pz), color, ParticleRadius);
+                        // Add some jitter
+                        if (_random.NextDouble() > 0.2)
+                        {
+                            uint color = _colors[_random.Next(_colors.Length)];
+                            var body = CreateBlock(x, startY + r * BlockSize, color);
+                            // Settle them initially
+                            body.IsSleeping = true;
+                        }
                     }
                 }
             }
@@ -288,9 +188,6 @@ namespace Artemis.Demo
 
         #region Game Logic
 
-        /// <summary>
-        /// Generates the next sand ball to drop.
-        /// </summary>
         private void GenerateNextBall()
         {
             _turn++;
@@ -302,297 +199,288 @@ namespace Artemis.Demo
                 Radius = radius,
                 Color = color,
                 ColorName = GetColorName(color),
-                ParticleCount = EstimateParticleCount(radius)
+                ParticleCount = (int)((Math.PI * radius * radius) / (BlockSize * BlockSize))
             };
         }
 
-        /// <summary>
-        /// Drops the current sand ball at the specified position.
-        /// </summary>
-        /// <param name="x">X coordinate (-TerrariumWidth/2 to TerrariumWidth/2)</param>
-        /// <param name="z">Z coordinate (-TerrariumDepth/2 to TerrariumDepth/2)</param>
-        /// <returns>True if the drop was successful.</returns>
         public bool DropBall(double x, double z)
         {
-            if (_gameOver)
-                return false;
+            if (_gameOver) return false;
 
-            // Clamp position to within terrarium
-            x = Math.Clamp(x, -TerrariumWidth / 2 + _currentBall.Radius,
-                          TerrariumWidth / 2 - _currentBall.Radius);
-            z = Math.Clamp(z, -TerrariumDepth / 2 + _currentBall.Radius,
-                          TerrariumDepth / 2 - _currentBall.Radius);
+            // Clamp X
+            x = Math.Clamp(x, -TerrariumWidth / 2 + _currentBall.Radius, TerrariumWidth / 2 - _currentBall.Radius);
 
-            // Drop from just below the top
-            double y = TerrariumHeight - _currentBall.Radius - 0.5;
+            // Start high up
+            double y = TerrariumHeight - _currentBall.Radius - 1.0;
 
-            var center = new Vector3D(x, y, z);
+            // Spawn a cluster of blocks approximating the circle
+            double r = _currentBall.Radius;
+            int count = 0;
 
-            // Create sand ball
-            _lastGroupId++;
-            var (startIndex, count) = _simulation.AddSandBall(
-                center,
-                _currentBall.Radius,
-                _currentBall.Color,
-                ParticleRadius
-            );
+            // Grid-based packing for the "ball"
+            for (double bx = -r; bx <= r; bx += BlockSize)
+            {
+                for (double by = -r; by <= r; by += BlockSize)
+                {
+                    if (bx * bx + by * by <= r * r)
+                    {
+                        CreateBlock(x + bx, y + by, _currentBall.Color);
+                        count++;
+                    }
+                }
+            }
 
             return true;
         }
 
-        /// <summary>
-        /// Updates the simulation with performance tracking.
-        /// </summary>
-        /// <param name="deltaTime">Time step in seconds.</param>
+        private RigidBody2D CreateBlock(double x, double y, uint color)
+        {
+            // Add some random offset to prevent perfect stacking issues
+            double jitter = BlockSize * 0.05;
+            x += (_random.NextDouble() - 0.5) * jitter;
+            y += (_random.NextDouble() - 0.5) * jitter;
+
+            var body = Physics.CreateBox2D(new Artemis.Physics2D.Vector2D(x, y), BlockSize, BlockSize);
+            body.Restitution = 0.1;
+            body.Friction = 0.4;
+            body.UserData = color; // Store color in UserData
+            _world.AddBody(body);
+            return body;
+        }
+
         public void Update(double deltaTime)
         {
-            if (_gameOver)
-                return;
+            if (_gameOver) return;
 
             _performanceTimer.Restart();
 
-            // Update shining particles animation
-            UpdateShiningParticles((float)deltaTime);
+            // Update shining animation
+            UpdateShiningBodies((float)deltaTime);
 
-            // Run simulation with substeps for stability
-            int substeps = deltaTime > 0.02 ? 2 : 1;
-            double subDt = deltaTime / substeps;
-
-            for (int i = 0; i < substeps; i++)
-            {
-                _simulation.Update(subDt);
-            }
+            // Step physics
+            _world.Step(deltaTime);
 
             _performanceTimer.Stop();
             _lastUpdateTimeMs = _performanceTimer.Elapsed.TotalMilliseconds;
 
-            // Update rolling average
             _updateCount++;
             _averageUpdateTimeMs = _averageUpdateTimeMs + (_lastUpdateTimeMs - _averageUpdateTimeMs) / Math.Min(_updateCount, 100);
         }
 
-        /// <summary>
-        /// Updates the shining particle animation.
-        /// </summary>
-        private void UpdateShiningParticles(float deltaTime)
+        private void UpdateShiningBodies(float deltaTime)
         {
-            _particlesToRemove.Clear();
+            _bodiesToRemove.Clear();
+            var keys = _shiningBodies.Keys.ToList();
 
-            foreach (var kvp in _shiningParticles)
+            foreach (var key in keys)
             {
-                float newProgress = kvp.Value + deltaTime / ShineAnimationDuration;
-
+                float newProgress = _shiningBodies[key] + deltaTime / ShineAnimationDuration;
                 if (newProgress >= 1.0f)
                 {
-                    _particlesToRemove.Add(kvp.Key);
+                    _bodiesToRemove.Add(key);
                 }
                 else
                 {
-                    _shiningParticles[kvp.Key] = newProgress;
+                    _shiningBodies[key] = newProgress;
                 }
             }
 
-            // Remove particles that finished shining
-            foreach (int idx in _particlesToRemove)
+            foreach (var id in _bodiesToRemove)
             {
-                _simulation.RemoveParticle(idx);
-                _shiningParticles.Remove(idx);
+                var body = _world.GetBody(id);
+                if (body != null)
+                {
+                    _world.RemoveBody(body);
+                }
+                _shiningBodies.Remove(id);
             }
         }
 
-        /// <summary>
-        /// Checks for completed lines and starts the shining animation.
-        /// Should be called after simulation settles.
-        /// </summary>
-        /// <returns>Number of particles that will be cleared.</returns>
         public int CheckAndClearLines()
         {
-            int totalToRemove = 0;
+            // For blocks, we check if connected blocks of same color span left-to-right
+            int totalRemoved = 0;
 
-            // Check each color
             foreach (uint color in _colors)
             {
-                // Check if color spans from left to right (X axis) - primary clear direction
-                if (_simulation.CheckSpansAxis(color, 0))
+                if (CheckSpansAxis(color))
                 {
-                    var toShine = FindSpanningParticles(color, 0);
-                    StartShiningAnimation(toShine);
-                    totalToRemove += toShine.Count;
+                    var connected = FindSpanningBodies(color);
+                    StartShiningAnimation(connected);
+                    totalRemoved += connected.Count;
                 }
             }
 
-            if (totalToRemove > 0)
+            if (totalRemoved > 0)
             {
-                _score += ScorePerClear + (totalToRemove * 10);
+                _score += ScorePerClear + (totalRemoved * 10);
             }
 
-            return totalToRemove;
+            return totalRemoved;
         }
 
-        /// <summary>
-        /// Finds all particles of a color that are part of a spanning connection.
-        /// </summary>
-        private List<int> FindSpanningParticles(uint color, int axis)
+        private bool CheckSpansAxis(uint color)
         {
-            var result = new List<int>();
-            var visited = new HashSet<int>();
+            // Find left-most blocks of this color
+            double minX = -TerrariumWidth / 2 + BlockSize;
+            double maxX = TerrariumWidth / 2 - BlockSize;
 
-            for (int i = 0; i < _simulation.Particles.Count; i++)
+            var bodies = _world.Bodies.Where(b => b.BodyType == BodyType2D.Dynamic && b.IsActive && b.UserData is uint c && c == color).ToList();
+
+            var startNodes = bodies.Where(b => b.Position.X <= minX + BlockSize).ToList();
+            if (startNodes.Count == 0) return false;
+
+            // BFS to see if we can reach maxX
+            var visited = new HashSet<RigidBody2D>();
+            var queue = new Queue<RigidBody2D>();
+
+            foreach (var node in startNodes)
             {
-                if (visited.Contains(i)) continue;
+                queue.Enqueue(node);
+                visited.Add(node);
+            }
 
-                var p = _simulation.Particles[i];
-                if (!p.IsActive || p.Color != color) continue;
+            while (queue.Count > 0)
+            {
+                var current = queue.Dequeue();
+                if (current.Position.X >= maxX - BlockSize) return true;
 
-                var connected = _simulation.FindConnectedParticles(i);
-
-                foreach (int idx in connected)
+                // Find neighbors
+                foreach (var other in bodies)
                 {
-                    visited.Add(idx);
+                    if (visited.Contains(other)) continue;
+
+                    double distSq = (current.Position - other.Position).MagnitudeSquared;
+                    // BlockSize is diagonal approx ~1.41 * size.
+                    // Allow slight gap
+                    double maxDist = BlockSize * 1.5;
+                    if (distSq < maxDist * maxDist)
+                    {
+                        visited.Add(other);
+                        queue.Enqueue(other);
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private List<RigidBody2D> FindSpanningBodies(uint color)
+        {
+            // Similar to CheckSpansAxis but returns the connected component that spans
+            double minX = -TerrariumWidth / 2 + BlockSize;
+            double maxX = TerrariumWidth / 2 - BlockSize;
+
+            var bodies = _world.Bodies.Where(b => b.BodyType == BodyType2D.Dynamic && b.IsActive && b.UserData is uint c && c == color).ToList();
+            var startNodes = bodies.Where(b => b.Position.X <= minX + BlockSize).ToList();
+
+            var spanningSet = new HashSet<RigidBody2D>();
+
+            foreach (var startNode in startNodes)
+            {
+                var component = new HashSet<RigidBody2D>();
+                var queue = new Queue<RigidBody2D>();
+                queue.Enqueue(startNode);
+                component.Add(startNode);
+
+                bool reachesEnd = false;
+
+                while (queue.Count > 0)
+                {
+                    var current = queue.Dequeue();
+                    if (current.Position.X >= maxX - BlockSize) reachesEnd = true;
+
+                    foreach (var other in bodies)
+                    {
+                        if (component.Contains(other)) continue;
+
+                        double distSq = (current.Position - other.Position).MagnitudeSquared;
+                        double maxDist = BlockSize * 1.5;
+
+                        if (distSq < maxDist * maxDist)
+                        {
+                            component.Add(other);
+                            queue.Enqueue(other);
+                        }
+                    }
                 }
 
-                if (CheckGroupSpansAxis(connected, axis))
+                if (reachesEnd)
                 {
-                    result.AddRange(connected);
+                    foreach (var b in component) spanningSet.Add(b);
                 }
             }
 
-            return result;
+            return spanningSet.ToList();
         }
 
-        /// <summary>
-        /// Starts the shining animation for particles about to be removed.
-        /// </summary>
-        private void StartShiningAnimation(List<int> particleIndices)
+        private void StartShiningAnimation(List<RigidBody2D> bodies)
         {
-            foreach (int idx in particleIndices)
+            foreach (var body in bodies)
             {
-                if (!_shiningParticles.ContainsKey(idx))
+                if (!_shiningBodies.ContainsKey(body.Id))
                 {
-                    _shiningParticles[idx] = 0;
+                    _shiningBodies[body.Id] = 0;
                 }
             }
         }
 
-        /// <summary>
-        /// Gets the shine color for a particle (brightened version of original).
-        /// </summary>
-        public uint GetShineColor(int particleIndex, uint originalColor)
-        {
-            if (!_shiningParticles.TryGetValue(particleIndex, out float progress))
-            {
-                return originalColor;
-            }
-
-            // Pulse effect: sine wave oscillation
-            float pulse = (float)(Math.Sin(progress * Math.PI * 4) * 0.5 + 0.5);
-            float brightness = 0.5f + pulse * 0.5f;
-
-            // Extract RGB
-            byte r = (byte)((originalColor >> 16) & 0xFF);
-            byte g = (byte)((originalColor >> 8) & 0xFF);
-            byte b = (byte)(originalColor & 0xFF);
-
-            // Brighten
-            r = (byte)Math.Min(255, r + (int)(255 - r) * brightness);
-            g = (byte)Math.Min(255, g + (int)(255 - g) * brightness);
-            b = (byte)Math.Min(255, b + (int)(255 - b) * brightness);
-
-            return 0xFF000000 | ((uint)r << 16) | ((uint)g << 8) | b;
-        }
-
-        /// <summary>
-        /// Checks if a particle is currently shining.
-        /// </summary>
-        public bool IsParticleShining(int particleIndex)
-        {
-            return _shiningParticles.ContainsKey(particleIndex);
-        }
-
-        private bool CheckGroupSpansAxis(List<int> indices, int axis)
-        {
-            if (indices.Count == 0) return false;
-
-            double min = double.MaxValue;
-            double max = double.MinValue;
-
-            foreach (int idx in indices)
-            {
-                var p = _simulation.Particles[idx];
-                double val = axis switch
-                {
-                    0 => p.Position.X,
-                    1 => p.Position.Y,
-                    2 => p.Position.Z,
-                    _ => 0
-                };
-                min = Math.Min(min, val);
-                max = Math.Max(max, val);
-            }
-
-            double axisSize = axis switch
-            {
-                0 => TerrariumWidth,
-                1 => TerrariumHeight,
-                2 => TerrariumDepth,
-                _ => 0
-            };
-
-            // Require 75% span for a match
-            return (max - min) >= axisSize * 0.75;
-        }
-
-        /// <summary>
-        /// Checks game end conditions.
-        /// </summary>
         public void CheckGameState()
         {
-            if (_gameOver)
-                return;
+            if (_gameOver) return;
 
-            // Check win condition: hole at bottom
-            if (_simulation.HasHoleAtBottom() && _simulation.ParticleCount > 50)
+            // Lose if full
+            // Check if any settled body is above a certain height
+            double topLimit = TerrariumHeight - 2.0;
+            if (_world.Bodies.Any(b => b.BodyType == BodyType2D.Dynamic && b.IsActive && b.Position.Y > topLimit && Math.Abs(b.Velocity.Y) < 0.1))
             {
-                _victory = true;
                 _gameOver = true;
+                _victory = false;
                 return;
             }
 
-            // Check lose condition: terrarium full
-            if (_simulation.IsFull())
+            // Win if hole at bottom (and enough blocks)
+            if (ActiveParticleCount > 50)
             {
-                _victory = false;
-                _gameOver = true;
-                return;
+                // Check bottom row for gaps
+                // Simple check: Raycast or interval check across the bottom
+                bool hasGap = false;
+                double yCheck = 0.5; // Just above floor
+
+                // Sweep X
+                for (double x = -TerrariumWidth/2 + 1.0; x < TerrariumWidth/2 - 1.0; x += BlockSize)
+                {
+                    var bodiesAtX = _world.QueryPoint(new Artemis.Physics2D.Vector2D(x, yCheck));
+                    if (bodiesAtX.Count == 0)
+                    {
+                        hasGap = true;
+                        break;
+                    }
+                }
+
+                if (hasGap)
+                {
+                    _victory = true;
+                    _gameOver = true;
+                }
             }
         }
 
-        /// <summary>
-        /// Advances to the next turn.
-        /// </summary>
         public void NextTurn()
         {
-            if (!_gameOver)
-            {
-                GenerateNextBall();
-            }
+            if (!_gameOver) GenerateNextBall();
         }
 
-        /// <summary>
-        /// Resets the game.
-        /// </summary>
-        /// <param name="withRandomTopography">If true, generates random starting topography.</param>
         public void Reset(bool withRandomTopography = true)
         {
-            _simulation.Clear();
-            _shiningParticles.Clear();
+            _world.ClearBodies();
+            CreateContainer(); // Re-add walls
+
+            _shiningBodies.Clear();
             _score = 0;
             _turn = 0;
             _gameOver = false;
             _victory = false;
-            _lastGroupId = 0;
-            _updateCount = 0;
-            _averageUpdateTimeMs = 0;
 
             if (withRandomTopography)
             {
@@ -606,12 +494,25 @@ namespace Artemis.Demo
 
         #region Helpers
 
-        private int EstimateParticleCount(double ballRadius)
+        public (double width, double height, double depth) GetTerrariumSize()
         {
-            double volume = (4.0 / 3.0) * Math.PI * ballRadius * ballRadius * ballRadius;
-            double particleVolume = (4.0 / 3.0) * Math.PI * ParticleRadius * ParticleRadius * ParticleRadius;
-            double packingEfficiency = 0.64; // Random close packing
-            return (int)(volume * packingEfficiency / particleVolume);
+            return (TerrariumWidth, TerrariumHeight, TerrariumDepth);
+        }
+
+        public uint GetShineColor(uint originalColor, float progress)
+        {
+            float pulse = (float)(Math.Sin(progress * Math.PI * 4) * 0.5 + 0.5);
+            float brightness = 0.5f + pulse * 0.5f;
+
+            byte r = (byte)((originalColor >> 16) & 0xFF);
+            byte g = (byte)((originalColor >> 8) & 0xFF);
+            byte b = (byte)(originalColor & 0xFF);
+
+            r = (byte)Math.Min(255, r + (int)(255 - r) * brightness);
+            g = (byte)Math.Min(255, g + (int)(255 - g) * brightness);
+            b = (byte)Math.Min(255, b + (int)(255 - b) * brightness);
+
+            return 0xFF000000 | ((uint)r << 16) | ((uint)g << 8) | b;
         }
 
         private string GetColorName(uint color)
@@ -628,9 +529,6 @@ namespace Artemis.Demo
             };
         }
 
-        /// <summary>
-        /// Gets the color as RGB components.
-        /// </summary>
         public static (byte r, byte g, byte b) GetRGB(uint color)
         {
             return (
@@ -640,91 +538,14 @@ namespace Artemis.Demo
             );
         }
 
-        /// <summary>
-        /// Drops the ball at a screen position (for mouse/touch input).
-        /// Converts screen coordinates to world coordinates.
-        /// </summary>
-        /// <param name="screenX">Screen X position (0 to screenWidth).</param>
-        /// <param name="screenY">Screen Y position (0 to screenHeight).</param>
-        /// <param name="screenWidth">Total screen width.</param>
-        /// <param name="screenHeight">Total screen height.</param>
-        /// <returns>True if the drop was successful.</returns>
-        public bool DropBallAtScreenPosition(double screenX, double screenY, double screenWidth, double screenHeight)
-        {
-            // Convert screen coordinates to world coordinates
-            // Screen (0,0) is top-left, world center is (0,0)
-            double normalizedX = screenX / screenWidth;  // 0 to 1
-            double normalizedY = screenY / screenHeight; // 0 to 1
-
-            double worldX = (normalizedX - 0.5) * TerrariumWidth;
-            double worldZ = (normalizedY - 0.5) * TerrariumDepth;
-
-            return DropBall(worldX, worldZ);
-        }
-
-        /// <summary>
-        /// Gets the world position from a screen position.
-        /// </summary>
-        public Vector3D ScreenToWorldPosition(double screenX, double screenY, double screenWidth, double screenHeight, double worldY = 0)
-        {
-            double normalizedX = screenX / screenWidth;
-            double normalizedY = screenY / screenHeight;
-
-            double worldX = (normalizedX - 0.5) * TerrariumWidth;
-            double worldZ = (normalizedY - 0.5) * TerrariumDepth;
-
-            return new Vector3D(worldX, worldY, worldZ);
-        }
-
-        /// <summary>
-        /// Gets the screen position from a world position.
-        /// </summary>
-        public (double screenX, double screenY) WorldToScreenPosition(Vector3D worldPos, double screenWidth, double screenHeight)
-        {
-            double normalizedX = (worldPos.X / TerrariumWidth) + 0.5;
-            double normalizedY = (worldPos.Z / TerrariumDepth) + 0.5;
-
-            return (normalizedX * screenWidth, normalizedY * screenHeight);
-        }
-
-        /// <summary>
-        /// Gets the terrarium dimensions for rendering.
-        /// </summary>
-        public (double width, double height, double depth) GetTerrariumSize()
-        {
-            return (TerrariumWidth, TerrariumHeight, TerrariumDepth);
-        }
-
-        /// <summary>
-        /// Gets a formatted string for the real-time grain counter dialog.
-        /// </summary>
-        public string GetGrainCounterText()
-        {
-            return $"=== Sand Grains ===\n" +
-                   $"Active: {ActiveParticleCount:N0}\n" +
-                   $"Total: {ParticleCount:N0}\n" +
-                   $"Shining: {_shiningParticles.Count}\n" +
-                   $"Update: {_lastUpdateTimeMs:F1}ms";
-        }
-
         #endregion
     }
 
-    /// <summary>
-    /// Information about a sand ball to be dropped.
-    /// </summary>
     public struct SandBallInfo
     {
-        /// <summary>Radius of the sand ball.</summary>
         public double Radius;
-
-        /// <summary>Color of the sand particles (ARGB).</summary>
         public uint Color;
-
-        /// <summary>Name of the color.</summary>
         public string ColorName;
-
-        /// <summary>Estimated number of particles.</summary>
         public int ParticleCount;
     }
 }

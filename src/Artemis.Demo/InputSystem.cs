@@ -13,7 +13,7 @@ namespace Artemis.Demo
         /// <summary>
         /// Gets the current pointer (mouse/touch) position in screen coordinates.
         /// </summary>
-        Vector2D PointerPosition { get; }
+        Artemis.Demo.Vector2D PointerPosition { get; }
 
         /// <summary>
         /// Gets whether the primary pointer is pressed (left click / touch).
@@ -90,7 +90,7 @@ namespace Artemis.Demo
     public struct TouchPoint
     {
         public int Id;
-        public Vector2D Position;
+        public Artemis.Demo.Vector2D Position;
         public TouchPhase Phase;
     }
 
@@ -125,13 +125,13 @@ namespace Artemis.Demo
     /// </summary>
     public class ConsoleInputProvider : IInputProvider
     {
-        private Vector2D _pointerPosition;
+        private Artemis.Demo.Vector2D _pointerPosition;
         private bool _isPointerPressed;
         private readonly HashSet<InputKey> _pressedKeys = new();
         private readonly HashSet<InputKey> _justPressedKeys = new();
         private readonly List<TouchPoint> _touchPoints = new();
 
-        public Vector2D PointerPosition => _pointerPosition;
+        public Artemis.Demo.Vector2D PointerPosition => _pointerPosition;
         public bool IsPointerPressed => _isPointerPressed;
         public bool IsSecondaryPressed => false;
         public IReadOnlyList<TouchPoint> TouchPoints => _touchPoints;
@@ -142,7 +142,7 @@ namespace Artemis.Demo
 
         public ConsoleInputProvider()
         {
-            _pointerPosition = new Vector2D(ScreenWidth / 2, ScreenHeight / 2);
+            _pointerPosition = new Artemis.Demo.Vector2D(ScreenWidth / 2, ScreenHeight / 2);
         }
 
         public bool IsKeyPressed(InputKey key) => _pressedKeys.Contains(key);
@@ -219,7 +219,7 @@ namespace Artemis.Demo
     public class GestureRecognizer
     {
         private readonly List<TouchPoint> _activeTouches = new();
-        private Vector2D _lastTouchPosition;
+        private Artemis.Demo.Vector2D _lastTouchPosition;
         private DateTime _touchStartTime;
         private bool _isDragging;
 
@@ -236,22 +236,22 @@ namespace Artemis.Demo
         /// <summary>
         /// Event raised when a tap is detected.
         /// </summary>
-        public event Action<Vector2D>? OnTap;
+        public event Action<Artemis.Demo.Vector2D>? OnTap;
 
         /// <summary>
         /// Event raised when dragging starts.
         /// </summary>
-        public event Action<Vector2D>? OnDragStart;
+        public event Action<Artemis.Demo.Vector2D>? OnDragStart;
 
         /// <summary>
         /// Event raised during dragging.
         /// </summary>
-        public event Action<Vector2D, Vector2D>? OnDrag; // current, delta
+        public event Action<Artemis.Demo.Vector2D, Artemis.Demo.Vector2D>? OnDrag; // current, delta
 
         /// <summary>
         /// Event raised when dragging ends.
         /// </summary>
-        public event Action<Vector2D>? OnDragEnd;
+        public event Action<Artemis.Demo.Vector2D>? OnDragEnd;
 
         /// <summary>
         /// Event raised for pinch gesture (zoom).
@@ -350,7 +350,7 @@ namespace Artemis.Demo
         /// <summary>
         /// Converts screen position to world position (top-down view).
         /// </summary>
-        public Vector3D ScreenToWorld(Vector2D screenPos, double worldY = 0)
+        public Vector3D ScreenToWorld(Artemis.Demo.Vector2D screenPos, double worldY = 0)
         {
             double normalizedX = screenPos.X / ScreenWidth;
             double normalizedY = screenPos.Y / ScreenHeight;
@@ -364,18 +364,18 @@ namespace Artemis.Demo
         /// <summary>
         /// Converts world position to screen position.
         /// </summary>
-        public Vector2D WorldToScreen(Vector3D worldPos)
+        public Artemis.Demo.Vector2D WorldToScreen(Vector3D worldPos)
         {
             double normalizedX = (worldPos.X - WorldBounds.Min.X) / (WorldBounds.Max.X - WorldBounds.Min.X);
             double normalizedZ = (worldPos.Z - WorldBounds.Min.Z) / (WorldBounds.Max.Z - WorldBounds.Min.Z);
 
-            return new Vector2D(normalizedX * ScreenWidth, normalizedZ * ScreenHeight);
+            return new Artemis.Demo.Vector2D(normalizedX * ScreenWidth, normalizedZ * ScreenHeight);
         }
 
         /// <summary>
         /// Casts a ray from screen position into the world.
         /// </summary>
-        public (Vector3D origin, Vector3D direction) ScreenToRay(Vector2D screenPos)
+        public (Vector3D origin, Vector3D direction) ScreenToRay(Artemis.Demo.Vector2D screenPos)
         {
             var worldPoint = ScreenToWorld(screenPos, 0);
             var origin = new Vector3D(worldPoint.X, CameraHeight, worldPoint.Z);
