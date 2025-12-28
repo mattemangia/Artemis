@@ -1,3 +1,4 @@
+using FontStashSharp;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
@@ -8,7 +9,7 @@ namespace Artemis.Graphics;
 
 /// <summary>
 /// Base graphics window for physics demos using OpenTK
-/// Provides 2D rendering capabilities with camera control
+/// Provides 2D rendering capabilities with camera control and text rendering
 /// </summary>
 public abstract class GraphicsWindow : GameWindow
 {
@@ -24,6 +25,10 @@ public abstract class GraphicsWindow : GameWindow
     private int _circleVao;
     private int _circleVbo;
     private const int CircleSegments = 32;
+
+    // Text rendering
+    private TextRenderer? _textRenderer;
+    protected bool TextRenderingAvailable => _textRenderer?.IsAvailable ?? false;
 
     protected bool IsPaused { get; set; } = false;
     protected float TimeScale { get; set; } = 1.0f;
@@ -58,6 +63,21 @@ public abstract class GraphicsWindow : GameWindow
 
         // Create circle buffer
         CreateCircleBuffer();
+
+        // Initialize text renderer
+        try
+        {
+            _textRenderer = new TextRenderer(Size.X, Size.Y, 16);
+            if (_textRenderer.IsAvailable)
+            {
+                Console.WriteLine("Text rendering initialized successfully");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Text rendering unavailable: {ex.Message}");
+            _textRenderer = null;
+        }
 
         // Initialize the demo
         Initialize();
@@ -245,10 +265,12 @@ public abstract class GraphicsWindow : GameWindow
     {
         base.OnResize(e);
         GL.Viewport(0, 0, e.Width, e.Height);
+        _textRenderer?.UpdateWindowSize(e.Width, e.Height);
     }
 
     protected override void OnUnload()
     {
+        _textRenderer?.Dispose();
         GL.DeleteVertexArray(_vao);
         GL.DeleteBuffer(_vbo);
         GL.DeleteVertexArray(_circleVao);
@@ -429,6 +451,97 @@ public abstract class GraphicsWindow : GameWindow
         {
             DrawBox(body.Position, box.Width, box.Height, body.Rotation, color);
         }
+    }
+
+    #endregion
+
+    #region Text Drawing Methods
+
+    /// <summary>
+    /// Draw text at screen coordinates (pixels from top-left)
+    /// </summary>
+    protected void DrawScreenText(string text, float x, float y, Color4 color)
+    {
+        if (_textRenderer == null || !_textRenderer.IsAvailable) return;
+        _textRenderer.DrawText(text, x, y, ToFSColor(color));
+    }
+
+    /// <summary>
+    /// Draw text at screen coordinates with custom font size
+    /// </summary>
+    protected void DrawScreenText(string text, float x, float y, int fontSize, Color4 color)
+    {
+        if (_textRenderer == null || !_textRenderer.IsAvailable) return;
+        _textRenderer.DrawText(text, x, y, fontSize, ToFSColor(color));
+    }
+
+    /// <summary>
+    /// Draw text at world coordinates (will be transformed by camera)
+    /// </summary>
+    protected void DrawWorldText(string text, Vector2 worldPos, Color4 color)
+    {
+        if (_textRenderer == null || !_textRenderer.IsAvailable) return;
+        var screenPos = WorldToScreen(worldPos);
+        _textRenderer.DrawText(text, screenPos.X, screenPos.Y, ToFSColor(color));
+    }
+
+    /// <summary>
+    /// Draw text at world coordinates with custom font size
+    /// </summary>
+    protected void DrawWorldText(string text, Vector2 worldPos, int fontSize, Color4 color)
+    {
+        if (_textRenderer == null || !_textRenderer.IsAvailable) return;
+        var screenPos = WorldToScreen(worldPos);
+        _textRenderer.DrawText(text, screenPos.X, screenPos.Y, fontSize, ToFSColor(color));
+    }
+
+    /// <summary>
+    /// Draw centered text at screen coordinates
+    /// </summary>
+    protected void DrawScreenTextCentered(string text, float x, float y, int fontSize, Color4 color)
+    {
+        if (_textRenderer == null || !_textRenderer.IsAvailable) return;
+        var size = _textRenderer.MeasureText(text, fontSize);
+        _textRenderer.DrawText(text, x - size.X / 2, y - size.Y / 2, fontSize, ToFSColor(color));
+    }
+
+    /// <summary>
+    /// Convert world coordinates to screen coordinates
+    /// </summary>
+    protected System.Numerics.Vector2 WorldToScreen(Vector2 worldPos)
+    {
+        float aspect = (float)Size.X / Size.Y;
+        float halfWidth = (float)(CameraZoom * aspect);
+        float halfHeight = (float)CameraZoom;
+
+        // Normalized coordinates (-1 to 1)
+        float nx = (float)((worldPos.X - CameraPosition.X) / halfWidth);
+        float ny = (float)((worldPos.Y - CameraPosition.Y) / halfHeight);
+
+        // Screen coordinates
+        float sx = (nx + 1) * 0.5f * Size.X;
+        float sy = (1 - ny) * 0.5f * Size.Y; // Flip Y for screen space
+
+        return new System.Numerics.Vector2(sx, sy);
+    }
+
+    /// <summary>
+    /// Measure text size in pixels
+    /// </summary>
+    protected System.Numerics.Vector2 MeasureText(string text, int fontSize = 16)
+    {
+        if (_textRenderer == null || !_textRenderer.IsAvailable)
+            return System.Numerics.Vector2.Zero;
+        return _textRenderer.MeasureText(text, fontSize);
+    }
+
+    private static FSColor ToFSColor(Color4 color)
+    {
+        return new FSColor(
+            (byte)(color.R * 255),
+            (byte)(color.G * 255),
+            (byte)(color.B * 255),
+            (byte)(color.A * 255));
     }
 
     #endregion

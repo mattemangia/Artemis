@@ -2,25 +2,49 @@ using FontStashSharp;
 using FontStashSharp.Interfaces;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
+using System.Net.Http;
 using System.Numerics;
 
 namespace Artemis.Graphics;
 
 /// <summary>
-/// OpenGL text renderer using FontStashSharp
+/// OpenGL text renderer using FontStashSharp with cross-platform font support
+/// Downloads and caches a free font if system fonts aren't available
 /// </summary>
 public class TextRenderer : IDisposable
 {
     private readonly FontSystem _fontSystem;
-    private readonly SpriteFontBase _font;
+    private readonly Dictionary<int, SpriteFontBase> _fontCache = new();
     private readonly TextureRenderer _textureRenderer;
     private int _windowWidth;
     private int _windowHeight;
+    private int _defaultFontSize;
+    private bool _isInitialized;
+
+    private static readonly string CacheDirectory = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "Artemis", "Fonts");
+
+    private static readonly string CachedFontPath = Path.Combine(CacheDirectory, "RobotoMono-Regular.ttf");
+
+    // Google Fonts CDN URL for Roboto Mono (free, open-source font)
+    private const string FontDownloadUrl = "https://github.com/googlefonts/RobotoMono/raw/main/fonts/ttf/RobotoMono-Regular.ttf";
+
+    // Fallback URLs in case primary fails
+    private static readonly string[] FallbackFontUrls = new[]
+    {
+        "https://cdn.jsdelivr.net/gh/googlefonts/RobotoMono@main/fonts/ttf/RobotoMono-Regular.ttf",
+        "https://raw.githubusercontent.com/googlefonts/RobotoMono/main/fonts/ttf/RobotoMono-Regular.ttf"
+    };
+
+    public bool IsAvailable => _isInitialized;
 
     public TextRenderer(int windowWidth, int windowHeight, int fontSize = 16)
     {
         _windowWidth = windowWidth;
         _windowHeight = windowHeight;
+        _defaultFontSize = fontSize;
+        _textureRenderer = new TextureRenderer();
 
         var settings = new FontSystemSettings
         {
@@ -31,49 +55,192 @@ public class TextRenderer : IDisposable
 
         _fontSystem = new FontSystem(settings);
 
-        // Use built-in default font data
-        byte[] fontData = GetEmbeddedFontData();
-        _fontSystem.AddFont(fontData);
-
-        _font = _fontSystem.GetFont(fontSize);
-        _textureRenderer = new TextureRenderer();
+        // Try to load font (async initialization)
+        Task.Run(async () => await InitializeFontAsync()).Wait();
     }
 
-    private byte[] GetEmbeddedFontData()
+    private async Task InitializeFontAsync()
     {
-        // Generate a simple bitmap font (basic ASCII characters)
-        // For production, you would embed a TTF file
-        // Using a minimal embedded font approach
-        return GenerateDefaultFontData();
+        byte[]? fontData = null;
+
+        // 1. Try cached font first
+        fontData = TryLoadCachedFont();
+
+        // 2. Try system fonts
+        if (fontData == null)
+        {
+            fontData = TryLoadSystemFont();
+        }
+
+        // 3. Download font if needed
+        if (fontData == null)
+        {
+            fontData = await DownloadAndCacheFontAsync();
+        }
+
+        if (fontData != null)
+        {
+            try
+            {
+                _fontSystem.AddFont(fontData);
+                _isInitialized = true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to initialize font: {ex.Message}");
+                _isInitialized = false;
+            }
+        }
+        else
+        {
+            Console.WriteLine("Warning: No font available for text rendering");
+            _isInitialized = false;
+        }
     }
 
-    private byte[] GenerateDefaultFontData()
+    private byte[]? TryLoadCachedFont()
     {
-        // This creates a minimal valid TTF font structure
-        // In practice, you'd bundle a proper TTF file like Roboto or DejaVu Sans
-        // For now, we'll use the system fallback
+        if (File.Exists(CachedFontPath))
+        {
+            try
+            {
+                return File.ReadAllBytes(CachedFontPath);
+            }
+            catch
+            {
+                // Ignore errors, try other sources
+            }
+        }
+        return null;
+    }
 
-        // Try to load from common system font paths
+    private byte[]? TryLoadSystemFont()
+    {
+        // Comprehensive list of system font paths for Windows, macOS, and Linux
         string[] fontPaths = new[]
         {
+            // Linux - DejaVu (most common)
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
             "/usr/share/fonts/TTF/DejaVuSans.ttf",
+
+            // Linux - Liberation (RHEL/Fedora)
+            "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/liberation-mono/LiberationMono-Regular.ttf",
+            "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/liberation/LiberationMono-Regular.ttf",
+
+            // Linux - Noto (common fallback)
+            "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
+            "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
+            "/usr/share/fonts/google-noto/NotoSansMono-Regular.ttf",
+
+            // Linux - Ubuntu fonts
+            "/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf",
+            "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
+
+            // Linux - FreeType/misc
+            "/usr/share/fonts/truetype/freefont/FreeMono.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+
+            // Arch Linux paths
+            "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+            "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+
+            // Windows
+            "C:\\Windows\\Fonts\\consola.ttf",      // Consolas (monospace)
+            "C:\\Windows\\Fonts\\cour.ttf",         // Courier New
+            "C:\\Windows\\Fonts\\lucon.ttf",        // Lucida Console
             "C:\\Windows\\Fonts\\arial.ttf",
             "C:\\Windows\\Fonts\\segoeui.ttf",
-            "/System/Library/Fonts/Helvetica.ttc"
+            "C:\\Windows\\Fonts\\tahoma.ttf",
+
+            // macOS
+            "/System/Library/Fonts/Monaco.ttf",
+            "/System/Library/Fonts/Menlo.ttc",
+            "/System/Library/Fonts/SFMono-Regular.otf",
+            "/Library/Fonts/Arial.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/System/Library/Fonts/Geneva.ttf",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/System/Library/Fonts/Supplemental/Courier New.ttf",
+
+            // Homebrew on macOS
+            "/opt/homebrew/share/fonts/dejavu/DejaVuSansMono.ttf",
+            "/usr/local/share/fonts/dejavu/DejaVuSansMono.ttf",
         };
 
         foreach (var path in fontPaths)
         {
             if (File.Exists(path))
             {
-                return File.ReadAllBytes(path);
+                try
+                {
+                    var data = File.ReadAllBytes(path);
+                    Console.WriteLine($"Loaded font from: {path}");
+                    return data;
+                }
+                catch
+                {
+                    // Try next font
+                }
             }
         }
 
-        // Fallback: return minimal font data (will use built-in fallback)
-        throw new FileNotFoundException("No suitable font found. Please install DejaVu or Liberation fonts.");
+        return null;
+    }
+
+    private async Task<byte[]?> DownloadAndCacheFontAsync()
+    {
+        // Ensure cache directory exists
+        try
+        {
+            Directory.CreateDirectory(CacheDirectory);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Could not create font cache directory: {ex.Message}");
+            return null;
+        }
+
+        // Try downloading from each URL
+        var urls = new[] { FontDownloadUrl }.Concat(FallbackFontUrls);
+
+        using var httpClient = new HttpClient();
+        httpClient.Timeout = TimeSpan.FromSeconds(30);
+
+        foreach (var url in urls)
+        {
+            try
+            {
+                Console.WriteLine($"Downloading font from: {url}");
+                var data = await httpClient.GetByteArrayAsync(url);
+
+                if (data.Length > 10000) // Basic sanity check
+                {
+                    // Cache the font
+                    try
+                    {
+                        await File.WriteAllBytesAsync(CachedFontPath, data);
+                        Console.WriteLine($"Font cached to: {CachedFontPath}");
+                    }
+                    catch
+                    {
+                        // Continue even if caching fails
+                    }
+
+                    return data;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to download font from {url}: {ex.Message}");
+            }
+        }
+
+        return null;
     }
 
     public void UpdateWindowSize(int width, int height)
@@ -82,19 +249,51 @@ public class TextRenderer : IDisposable
         _windowHeight = height;
     }
 
+    private SpriteFontBase GetFont(int size)
+    {
+        if (!_fontCache.TryGetValue(size, out var font))
+        {
+            font = _fontSystem.GetFont(size);
+            _fontCache[size] = font;
+        }
+        return font;
+    }
+
     public void DrawText(string text, float x, float y, FSColor color)
     {
+        if (!_isInitialized) return;
+
         _textureRenderer.Begin(_windowWidth, _windowHeight);
-        _font.DrawText(_textureRenderer, text, new System.Numerics.Vector2(x, y), color);
+        GetFont(_defaultFontSize).DrawText(_textureRenderer, text, new System.Numerics.Vector2(x, y), color);
+        _textureRenderer.End();
+    }
+
+    public void DrawText(string text, float x, float y, int fontSize, FSColor color)
+    {
+        if (!_isInitialized) return;
+
+        _textureRenderer.Begin(_windowWidth, _windowHeight);
+        GetFont(fontSize).DrawText(_textureRenderer, text, new System.Numerics.Vector2(x, y), color);
         _textureRenderer.End();
     }
 
     public void DrawText(string text, float x, float y, float scale, FSColor color)
     {
-        var scaledFont = _fontSystem.GetFont((int)(_font.FontSize * scale));
-        _textureRenderer.Begin(_windowWidth, _windowHeight);
-        scaledFont.DrawText(_textureRenderer, text, new System.Numerics.Vector2(x, y), color);
-        _textureRenderer.End();
+        DrawText(text, x, y, (int)(_defaultFontSize * scale), color);
+    }
+
+    /// <summary>
+    /// Measures the size of text when rendered
+    /// </summary>
+    public System.Numerics.Vector2 MeasureText(string text, int fontSize)
+    {
+        if (!_isInitialized) return System.Numerics.Vector2.Zero;
+        return GetFont(fontSize).MeasureString(text);
+    }
+
+    public System.Numerics.Vector2 MeasureText(string text)
+    {
+        return MeasureText(text, _defaultFontSize);
     }
 
     public void Dispose()
@@ -119,6 +318,7 @@ public class TextureRenderer : IFontStashRenderer, ITexture2DManager, IDisposabl
     private List<VertexPositionColorTexture> _vertices = new();
     private List<int> _indices = new();
     private Dictionary<object, int> _textureIds = new();
+    private int? _currentTexture;
 
     private int _windowWidth;
     private int _windowHeight;
@@ -221,12 +421,21 @@ public class TextureRenderer : IFontStashRenderer, ITexture2DManager, IDisposabl
         _windowHeight = windowHeight;
         _vertices.Clear();
         _indices.Clear();
+        _currentTexture = null;
         _isDrawing = true;
     }
 
     public void End()
     {
         if (!_isDrawing || _vertices.Count == 0) return;
+
+        Flush();
+        _isDrawing = false;
+    }
+
+    private void Flush()
+    {
+        if (_vertices.Count == 0) return;
 
         GL.Enable(EnableCap.Blend);
         GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
@@ -239,6 +448,11 @@ public class TextureRenderer : IFontStashRenderer, ITexture2DManager, IDisposabl
 
         GL.ActiveTexture(TextureUnit.Texture0);
         GL.Uniform1(_textureLoc, 0);
+
+        if (_currentTexture.HasValue)
+        {
+            GL.BindTexture(TextureTarget.Texture2D, _currentTexture.Value);
+        }
 
         // Upload vertex data
         float[] vertexData = new float[_vertices.Count * 8];
@@ -269,7 +483,8 @@ public class TextureRenderer : IFontStashRenderer, ITexture2DManager, IDisposabl
         GL.BindVertexArray(0);
         GL.Disable(EnableCap.Blend);
 
-        _isDrawing = false;
+        _vertices.Clear();
+        _indices.Clear();
     }
 
     public ITexture2DManager TextureManager => this;
@@ -300,19 +515,24 @@ public class TextureRenderer : IFontStashRenderer, ITexture2DManager, IDisposabl
     public void Draw(object texture, System.Numerics.Vector2 pos, System.Drawing.Rectangle? src, FSColor color, float rotation,
         System.Numerics.Vector2 origin, float scale)
     {
-        var scaleVector = new System.Numerics.Vector2(scale, scale);
-        if (!_textureIds.TryGetValue(texture, out int textureId))
+        int textureId;
+        if (!_textureIds.TryGetValue(texture, out textureId))
         {
-            // Create OpenGL texture from FontStashSharp texture
             if (texture is Texture2D fsTexture)
             {
-                textureId = CreateGlTexture(fsTexture);
+                textureId = fsTexture.TextureId;
                 _textureIds[texture] = textureId;
             }
         }
 
-        GL.BindTexture(TextureTarget.Texture2D, textureId);
+        // Batch break if texture changes
+        if (_currentTexture.HasValue && _currentTexture.Value != textureId)
+        {
+            Flush();
+        }
+        _currentTexture = textureId;
 
+        var scaleVector = new System.Numerics.Vector2(scale, scale);
         var srcRect = src ?? new System.Drawing.Rectangle(0, 0, 1, 1);
 
         float x = pos.X - origin.X * scaleVector.X;
@@ -345,25 +565,6 @@ public class TextureRenderer : IFontStashRenderer, ITexture2DManager, IDisposabl
         _indices.Add(startIndex + 3);
     }
 
-    private int CreateGlTexture(Texture2D fsTexture)
-    {
-        int textureId = GL.GenTexture();
-        GL.BindTexture(TextureTarget.Texture2D, textureId);
-
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
-
-        // Get pixel data from FontStashSharp texture
-        byte[] data = new byte[fsTexture.Width * fsTexture.Height * 4];
-        fsTexture.GetData(data);
-
-        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba,
-            fsTexture.Width, fsTexture.Height, 0,
-            PixelFormat.Rgba, PixelType.UnsignedByte, data);
-
-        return textureId;
-    }
-
     public void Dispose()
     {
         foreach (var textureId in _textureIds.Values)
@@ -393,13 +594,13 @@ public struct VertexPositionColorTexture
 }
 
 /// <summary>
-/// FontStashSharp texture wrapper
+/// FontStashSharp texture wrapper with OpenGL integration
 /// </summary>
-public class Texture2D
+public class Texture2D : IDisposable
 {
-    private int _textureId;
     private byte[]? _pixelData;
 
+    public int TextureId { get; private set; }
     public int Width { get; }
     public int Height { get; }
 
@@ -409,10 +610,12 @@ public class Texture2D
         Height = height;
         _pixelData = new byte[width * height * 4];
 
-        _textureId = GL.GenTexture();
-        GL.BindTexture(TextureTarget.Texture2D, _textureId);
+        TextureId = GL.GenTexture();
+        GL.BindTexture(TextureTarget.Texture2D, TextureId);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
         GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
         GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba,
             width, height, 0, PixelFormat.Rgba, PixelType.UnsignedByte, _pixelData);
     }
@@ -440,7 +643,7 @@ public class Texture2D
         }
 
         // Update OpenGL texture
-        GL.BindTexture(TextureTarget.Texture2D, _textureId);
+        GL.BindTexture(TextureTarget.Texture2D, TextureId);
         GL.TexSubImage2D(TextureTarget.Texture2D, 0, bounds.X, bounds.Y, bounds.Width, bounds.Height,
             PixelFormat.Rgba, PixelType.UnsignedByte, data);
     }
@@ -455,7 +658,7 @@ public class Texture2D
 
     public void Dispose()
     {
-        GL.DeleteTexture(_textureId);
+        GL.DeleteTexture(TextureId);
         _pixelData = null;
     }
 }

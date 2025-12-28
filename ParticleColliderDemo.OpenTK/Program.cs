@@ -672,7 +672,7 @@ public class ParticleColliderWindow : GraphicsWindow
     }
 
     /// <summary>
-    /// Draw CERN-style interface panels (simulated with drawing primitives)
+    /// Draw CERN-style interface panels with text labels
     /// </summary>
     private void DrawCERNInterface()
     {
@@ -703,26 +703,26 @@ public class ParticleColliderWindow : GraphicsWindow
         // Panel background
         DrawPanelBackground(lpX, lpY, panelWidth, panelHeight);
 
-        // Panel header line
+        // Panel header
         float headerY = lpY - panelHeight * 0.08f;
         DrawLine(
             new Vector2D(lpX + panelWidth * 0.05f, headerY),
             new Vector2D(lpX + panelWidth * 0.95f, headerY),
             new Color4(0.2f, 0.8f, 1f, 0.8f), 2f);
 
-        // BEAM 1 gauge
+        // BEAM 1 gauge with label
         float gaugeY = lpY - panelHeight * 0.2f;
         float gaugeWidth = panelWidth * 0.8f;
         float gaugeHeight = panelHeight * 0.08f;
         DrawGauge(lpX + panelWidth * 0.1f, gaugeY, gaugeWidth, gaugeHeight,
             beam1Count / 20f, new Color4(1f, 0.3f, 0.3f, 0.9f), "B1");
 
-        // BEAM 2 gauge
+        // BEAM 2 gauge with label
         gaugeY -= panelHeight * 0.15f;
         DrawGauge(lpX + panelWidth * 0.1f, gaugeY, gaugeWidth, gaugeHeight,
             beam2Count / 20f, new Color4(0.3f, 0.6f, 1f, 0.9f), "B2");
 
-        // Energy gauge
+        // Energy gauge with label
         gaugeY -= panelHeight * 0.2f;
         DrawGauge(lpX + panelWidth * 0.1f, gaugeY, gaugeWidth, gaugeHeight,
             MathF.Min(1f, (float)(avgEnergy / 1000f)), new Color4(1f, 0.8f, 0.2f, 0.9f), "E");
@@ -761,6 +761,86 @@ public class ParticleColliderWindow : GraphicsWindow
 
         // === TOP CENTER - Time Display ===
         DrawTimeDisplay((float)CameraPosition.X, top - panelMargin * 2, halfWidth * 0.3f);
+
+        // === DRAW TEXT OVERLAYS (Screen Space) ===
+        DrawTextOverlays(beam1Count, beam2Count, avgEnergy, totalParticles, totalCollisions);
+    }
+
+    /// <summary>
+    /// Draw all text overlays for the CERN interface
+    /// </summary>
+    private void DrawTextOverlays(int beam1Count, int beam2Count, double avgEnergy, int totalParticles, int totalCollisions)
+    {
+        // Title
+        DrawScreenText("ARTEMIS PARTICLE COLLIDER", 20, 20, 24, new Color4(0.3f, 0.8f, 1f, 1f));
+        DrawScreenText("LHC Simulator", 20, 48, 14, new Color4(0.5f, 0.7f, 0.9f, 0.8f));
+
+        // Left panel labels
+        DrawScreenText("BEAM STATUS", 30, 85, 12, new Color4(0.2f, 0.8f, 1f, 0.9f));
+        DrawScreenText($"BEAM 1: {beam1Count} particles", 40, 115, 11, new Color4(1f, 0.3f, 0.3f, 0.9f));
+        DrawScreenText($"BEAM 2: {beam2Count} particles", 40, 155, 11, new Color4(0.3f, 0.6f, 1f, 0.9f));
+        DrawScreenText($"ENERGY: {avgEnergy:F0} GeV", 40, 195, 11, new Color4(1f, 0.8f, 0.2f, 0.9f));
+        DrawScreenText("PARTICLE COUNTS", 30, 235, 10, new Color4(0.6f, 0.8f, 1f, 0.7f));
+
+        // Particle type legend
+        string[] particleNames = { "p", "e-", "e+", "γ", "n", "q" };
+        Color4[] particleColors = {
+            new Color4(1f, 0.2f, 0.2f, 1f),  // Proton
+            new Color4(0.2f, 0.4f, 1f, 1f),  // Electron
+            new Color4(0.2f, 0.9f, 0.9f, 1f), // Positron
+            new Color4(1f, 1f, 0.2f, 1f),    // Photon
+            new Color4(0.6f, 0.6f, 0.6f, 1f), // Neutron
+            new Color4(0.2f, 0.9f, 0.2f, 1f)  // Quark
+        };
+        for (int i = 0; i < particleNames.Length; i++)
+        {
+            DrawScreenText(particleNames[i], 45 + i * 30, 290, 10, particleColors[i]);
+        }
+
+        // Right panel labels
+        int rightX = Size.X - 220;
+        DrawScreenText("COLLISION DATA", rightX, 85, 12, new Color4(1f, 0.5f, 0.2f, 0.9f));
+        DrawScreenText($"EVENTS: {totalCollisions}", rightX + 10, 110, 14, new Color4(1f, 0.8f, 0.3f, 1f));
+        DrawScreenText($"PARTICLES: {totalParticles}", rightX + 10, 130, 11, new Color4(0.8f, 0.8f, 0.8f, 0.9f));
+
+        // Status labels
+        DrawScreenText("SYSTEM STATUS", rightX, 200, 10, new Color4(0.6f, 0.8f, 1f, 0.7f));
+        string[] statusLabels = { "BEAM", "COLL", "HI-E", "DET", "SYS" };
+        for (int i = 0; i < statusLabels.Length; i++)
+        {
+            DrawScreenText(statusLabels[i], rightX + 8 + i * 38, 245, 8, new Color4(0.5f, 0.6f, 0.7f, 0.8f));
+        }
+
+        // Bottom center - ATLAS display label
+        int centerX = Size.X / 2;
+        DrawScreenTextCentered("EVENT DISPLAY", centerX, Size.Y - 180, 11, new Color4(0.5f, 0.7f, 0.9f, 0.8f));
+        DrawScreenTextCentered("ATLAS Cross-Section", centerX, Size.Y - 165, 9, new Color4(0.4f, 0.5f, 0.6f, 0.6f));
+
+        // Time display
+        float elapsed = (float)_experiment.SimulationTime;
+        DrawScreenTextCentered($"T: {elapsed:F2}s", centerX, 60, 14, new Color4(0.2f, 0.6f, 1f, 0.9f));
+
+        // Controls hint (bottom right)
+        DrawScreenText("CONTROLS", Size.X - 200, Size.Y - 90, 10, new Color4(0.4f, 0.6f, 0.8f, 0.7f));
+        DrawScreenText("[SPACE] Inject  [C] Clear", Size.X - 200, Size.Y - 75, 9, new Color4(0.5f, 0.5f, 0.5f, 0.7f));
+        DrawScreenText("[1-3] Beam Types  [P] Pause", Size.X - 200, Size.Y - 62, 9, new Color4(0.5f, 0.5f, 0.5f, 0.7f));
+        DrawScreenText("[RMB] Rotate  [Scroll] Zoom", Size.X - 200, Size.Y - 49, 9, new Color4(0.5f, 0.5f, 0.5f, 0.7f));
+        DrawScreenText("[R] Export Data", Size.X - 200, Size.Y - 36, 9, new Color4(0.5f, 0.5f, 0.5f, 0.7f));
+
+        // Collision event labels (in world space near collision points)
+        foreach (var (evt, timestamp) in _recentCollisions)
+        {
+            float age = (float)(_experiment.SimulationTime - timestamp);
+            if (age < 1.0f) // Show labels for recent collisions
+            {
+                var collisionPos = ToCavalier(evt.CollisionPoint, RingHeight);
+                float alpha = 1f - age;
+                var labelColor = new Color4(1f, 0.9f, 0.3f, alpha);
+
+                double totalEnergy = evt.TotalEnergyBefore;
+                DrawWorldText($"{totalEnergy:F0} GeV", new Vector2((float)collisionPos.X + 1f, (float)collisionPos.Y + 1f), 10, labelColor);
+            }
+        }
     }
 
     private void DrawPanelBackground(float x, float y, float width, float height)
