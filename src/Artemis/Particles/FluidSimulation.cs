@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+#if !NETSTANDARD2_1
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
 using System.Runtime.Intrinsics.Arm;
+#endif
 using System.Threading;
 using System.Threading.Tasks;
 using System.Numerics;
@@ -62,8 +64,13 @@ namespace Artemis.Particles
         private readonly object _countLock = new object();
 
         // SIMD detection
+#if NETSTANDARD2_1
+        private static readonly bool HasAvx = false;
+        private static readonly bool HasNeon = false;
+#else
         private static readonly bool HasAvx = Avx.IsSupported;
         private static readonly bool HasNeon = AdvSimd.IsSupported;
+#endif
 
         #endregion
 

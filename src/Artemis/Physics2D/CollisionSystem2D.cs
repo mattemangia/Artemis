@@ -385,7 +385,7 @@ namespace Artemis.Physics2D
                 if (a.Shape is CircleShape circleA && b.Shape is CircleShape circleB)
                 {
                     manifold = new Manifold2D();
-                    if (!CollisionDetector2D.CircleVsCircle(a, b, circleA, circleB, manifold))
+                    if (!CollisionDetector2D.CircleVsCircle(a, b, manifold))
                         manifold = null;
                 }
                 else if (a.Shape is CircleShape circle && b.Shape is BoxShape box)

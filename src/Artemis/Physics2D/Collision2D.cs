@@ -40,6 +40,12 @@ namespace Artemis.Physics2D
         /// <summary>Contact points.</summary>
         public Contact2D[] Contacts { get; } = new Contact2D[2];
 
+        /// <summary>Contact normal (from A to B).</summary>
+        public Vector2D Normal { get; set; }
+
+        /// <summary>Penetration depth.</summary>
+        public double Penetration { get; set; }
+
         /// <summary>Number of valid contacts.</summary>
         public int ContactCount { get; set; }
 
@@ -48,6 +54,9 @@ namespace Artemis.Physics2D
 
         /// <summary>Combined restitution.</summary>
         public double Restitution { get; set; }
+
+        /// <summary>Whether this manifold represents a trigger overlap.</summary>
+        public bool IsTrigger { get; set; }
 
         /// <summary>Whether the collision is still active.</summary>
         public bool IsActive { get; set; } = true;

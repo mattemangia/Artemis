@@ -1,4 +1,3 @@
-using ArtemisEngine;
 
 namespace PhysicsCatapultDemo;
 
@@ -9,7 +8,7 @@ public class LevelBuilder
         var objects = new List<GameObject>();
 
         // Ground
-        var groundShape = new BoxShape(100, 2);
+        var groundShape = new BoxShape(50, 1);
         var groundBody = new RigidBody(new Vector2(25, -1), 0, groundShape, isStatic: true);
         objects.Add(new GameObject(groundBody, GameObjectType.Ground));
 
@@ -43,7 +42,7 @@ public class LevelBuilder
         var objects = new List<GameObject>();
 
         // Ground
-        var groundShape = new BoxShape(100, 2);
+        var groundShape = new BoxShape(50, 1);
         var groundBody = new RigidBody(new Vector2(25, -1), 0, groundShape, isStatic: true);
         objects.Add(new GameObject(groundBody, GameObjectType.Ground));
 
@@ -69,7 +68,7 @@ public class LevelBuilder
         var objects = new List<GameObject>();
 
         // Ground
-        var groundShape = new BoxShape(100, 2);
+        var groundShape = new BoxShape(50, 1);
         var groundBody = new RigidBody(new Vector2(25, -1), 0, groundShape, isStatic: true);
         objects.Add(new GameObject(groundBody, GameObjectType.Ground));
 
@@ -109,7 +108,7 @@ public class LevelBuilder
 
     private static GameObject CreateBlock(Vector2 position, float width, float height, Material material)
     {
-        var shape = new BoxShape(width, height);
+        var shape = new BoxShape(width * 0.5f, height * 0.5f);
         float volume = width * height;
         float mass = volume * material.Density;
         var body = new RigidBody(position, mass, shape);

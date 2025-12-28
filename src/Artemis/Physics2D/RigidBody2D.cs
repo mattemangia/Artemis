@@ -48,6 +48,15 @@ namespace Artemis.Physics2D
         /// <summary>Type of physics body.</summary>
         public BodyType2D BodyType { get; set; } = BodyType2D.Dynamic;
 
+        /// <summary>
+        /// Gets or sets whether the body is static (alias for BodyType).
+        /// </summary>
+        public bool IsStatic
+        {
+            get => BodyType == BodyType2D.Static;
+            set => BodyType = value ? BodyType2D.Static : BodyType2D.Dynamic;
+        }
+
         /// <summary>Whether the body is active in simulation.</summary>
         public bool IsActive { get; set; } = true;
 
@@ -133,6 +142,46 @@ namespace Artemis.Physics2D
         /// <summary>Physics material (friction, restitution).</summary>
         public PhysicsMaterial Material { get; set; }
 
+        /// <summary>
+        /// Gets or sets the coefficient of restitution (bounciness).
+        /// </summary>
+        public double Restitution
+        {
+            get => Material.Restitution;
+            set => Material.Restitution = value;
+        }
+
+        /// <summary>
+        /// Gets or sets the friction coefficient (applies to static and dynamic friction).
+        /// </summary>
+        public double Friction
+        {
+            get => Material.DynamicFriction;
+            set
+            {
+                Material.StaticFriction = value;
+                Material.DynamicFriction = value;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets the collision layer (category bits).
+        /// </summary>
+        public ushort CollisionLayer
+        {
+            get => CategoryBits;
+            set => CategoryBits = value;
+        }
+
+        /// <summary>
+        /// Gets or sets the collision mask (mask bits).
+        /// </summary>
+        public ushort CollisionMask
+        {
+            get => MaskBits;
+            set => MaskBits = value;
+        }
+
         /// <summary>Linear damping (air resistance).</summary>
         public double LinearDamping { get; set; } = 0.0;
 
@@ -147,6 +196,12 @@ namespace Artemis.Physics2D
 
         /// <summary>Whether the body can go to sleep.</summary>
         public bool CanSleep { get; set; } = true;
+
+        /// <summary>Whether the body is a trigger (sensor only, no collision response).</summary>
+        public bool IsTrigger { get; set; }
+
+        /// <summary>Whether to use continuous collision detection for this body.</summary>
+        public bool UseCCD { get; set; }
 
         /// <summary>Whether the body is a bullet (uses continuous collision detection).</summary>
         public bool IsBullet { get; set; }
@@ -199,6 +254,39 @@ namespace Artemis.Physics2D
         {
             _position = position;
             Mass = mass;
+        }
+
+        /// <summary>
+        /// Creates a new 2D rigid body with a shape and mass.
+        /// </summary>
+        public RigidBody2D(Vector2D position, double mass, Shape2D shape, bool isStatic = false, string? id = null)
+            : this(position, mass, id)
+        {
+            Shape = shape;
+
+            if (isStatic || mass <= PhysicsConstants.Epsilon)
+            {
+                BodyType = BodyType2D.Static;
+            }
+
+            if (Shape != null && BodyType == BodyType2D.Dynamic)
+            {
+                var baseMass = Shape.ComputeMass(1.0);
+                if (baseMass.Mass > PhysicsConstants.Epsilon)
+                {
+                    var density = mass / baseMass.Mass;
+                    var massData = Shape.ComputeMass(density);
+                    Mass = massData.Mass;
+                    Inertia = massData.Inertia;
+                }
+                else
+                {
+                    Mass = mass;
+                    Inertia = 0;
+                }
+            }
+
+            UpdateAABB();
         }
 
         #endregion

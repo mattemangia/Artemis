@@ -168,8 +168,10 @@ namespace Artemis.Physics2D
             if (bodyA.BodyType == BodyType2D.Static && bodyB.BodyType == BodyType2D.Static)
                 return;
 
-            Vector2D normal = collision.Normal;
-            Vector2D contactPoint = collision.ContactPoint;
+            Vector2D normal = collision.ContactCount > 0 ? collision.Contacts[0].Normal : collision.Normal;
+            Vector2D contactPoint = collision.ContactCount > 0
+                ? collision.Contacts[0].Point
+                : (bodyA.Position + bodyB.Position) * 0.5;
             double penetration = collision.Penetration;
 
             var manifold = _persistence.GetOrCreateManifold(bodyA, bodyB);

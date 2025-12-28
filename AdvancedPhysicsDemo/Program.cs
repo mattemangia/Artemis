@@ -1,4 +1,3 @@
-using ArtemisEngine;
 using AdvancedPhysicsDemo;
 
 class Program
@@ -114,7 +113,7 @@ abstract class Game
 
     protected void CreateGround(float y = 0)
     {
-        var ground = new RigidBody(new Vector2(25, y), 0, new BoxShape(100, 2), isStatic: true);
+        var ground = new RigidBody(new Vector2(25, y), 0, new BoxShape(50, 1), isStatic: true);
         ground.CollisionLayer = CollisionLayers.Ground;
         _world.AddBody(ground);
     }
@@ -133,10 +132,10 @@ class RagdollDemo : Game
         SpawnRagdoll(new Vector2(15, 15));
 
         // Create some obstacles
-        var box1 = new RigidBody(new Vector2(25, 3), 10, new BoxShape(3, 1));
+        var box1 = new RigidBody(new Vector2(25, 3), 10, new BoxShape(1.5f, 0.5f));
         _world.AddBody(box1);
 
-        var box2 = new RigidBody(new Vector2(30, 6), 15, new BoxShape(2, 2));
+        var box2 = new RigidBody(new Vector2(30, 6), 15, new BoxShape(1, 1));
         _world.AddBody(box2);
     }
 
@@ -224,7 +223,7 @@ class VehicleDemo : Game
         {
             float x = 10 + i * 5;
             float height = (i % 2 == 0) ? 1f : 2f;
-            var bump = new RigidBody(new Vector2(x, height - 1), 0, new BoxShape(4, height), isStatic: true);
+            var bump = new RigidBody(new Vector2(x, height - 1), 0, new BoxShape(2, height * 0.5f), isStatic: true);
             bump.CollisionLayer = CollisionLayers.Ground;
             _world.AddBody(bump);
         }
@@ -235,7 +234,7 @@ class VehicleDemo : Game
         // Create obstacles
         for (int i = 0; i < 5; i++)
         {
-            var obstacle = new RigidBody(new Vector2(20 + i * 8, 3), 5, new BoxShape(2, 2));
+            var obstacle = new RigidBody(new Vector2(20 + i * 8, 3), 5, new BoxShape(1, 1));
             _obstacles.Add(obstacle);
             _world.AddBody(obstacle);
         }
@@ -426,7 +425,7 @@ class RaycastDemo : Game
             float x = 15 + (i % 4) * 7;
             float y = 3 + (i / 4) * 8;
 
-            Shape shape = i % 2 == 0 ? (Shape)new CircleShape(1.5f) : new BoxShape(2, 2);
+            Shape shape = i % 2 == 0 ? (Shape)new CircleShape(1.5f) : new BoxShape(1, 1);
             var target = new RigidBody(new Vector2(x, y), 10, shape);
             target.CollisionLayer = CollisionLayers.Enemy;
             target.Restitution = 0.5f;
@@ -519,7 +518,7 @@ class RaycastDemo : Game
             _renderer.DrawText(2, 8, "No hit", ConsoleColor.DarkGray);
         }
 
-        _renderer.DrawText(2, 9, $"Angle: {MathF.Atan2(_rayDirection.Y, _rayDirection.X) * 180 / MathF.PI:F0}°", ConsoleColor.White);
+        _renderer.DrawText(2, 9, $"Angle: {Math.Atan2(_rayDirection.Y, _rayDirection.X) * 180.0 / Math.PI:F0}°", ConsoleColor.White);
     }
 }
 
@@ -541,7 +540,7 @@ class TriggerDemo : Game
         _triggers.Add(trigger1);
         _world.AddBody(trigger1);
 
-        var trigger2 = new RigidBody(new Vector2(30, 8), 0, new BoxShape(5, 5), isStatic: true);
+        var trigger2 = new RigidBody(new Vector2(30, 8), 0, new BoxShape(2.5f, 2.5f), isStatic: true);
         trigger2.IsTrigger = true;
         trigger2.CollisionLayer = CollisionLayers.Trigger;
         _triggers.Add(trigger2);
@@ -553,10 +552,10 @@ class TriggerDemo : Game
         _world.OnCollisionEnter += OnCollisionEnter;
 
         // Create walls
-        var wall1 = new RigidBody(new Vector2(0, 10), 0, new BoxShape(1, 30), isStatic: true);
+        var wall1 = new RigidBody(new Vector2(0, 10), 0, new BoxShape(0.5f, 15), isStatic: true);
         _world.AddBody(wall1);
 
-        var wall2 = new RigidBody(new Vector2(50, 10), 0, new BoxShape(1, 30), isStatic: true);
+        var wall2 = new RigidBody(new Vector2(50, 10), 0, new BoxShape(0.5f, 15), isStatic: true);
         _world.AddBody(wall2);
     }
 

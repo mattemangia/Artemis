@@ -3,7 +3,6 @@ using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.Desktop;
 using OpenTK.Windowing.GraphicsLibraryFramework;
-using ArtemisEngine;
 
 namespace Artemis.Graphics;
 
@@ -42,7 +41,7 @@ public abstract class GraphicsWindow : GameWindow
                 APIVersion = new Version(3, 3)
             })
     {
-        World = new PhysicsWorld(new ArtemisEngine.Vector2(0, -10f));
+        World = new PhysicsWorld(new Vector2(0, -10f));
     }
 
     protected override void OnLoad()
@@ -260,21 +259,24 @@ public abstract class GraphicsWindow : GameWindow
 
     #region Drawing Methods
 
-    protected void DrawCircle(ArtemisEngine.Vector2 center, float radius, Color4 color, bool filled = true)
+    protected void DrawCircle(Vector2 center, double radius, Color4 color, bool filled = true)
     {
         int colorLoc = GL.GetUniformLocation(_shaderProgram, "color");
         GL.Uniform4(colorLoc, color);
 
         // Create transformation for the circle
         float[] vertices = new float[(CircleSegments + 2) * 2];
-        vertices[0] = center.X;
-        vertices[1] = center.Y;
+        float centerX = (float)center.X;
+        float centerY = (float)center.Y;
+        float radiusF = (float)radius;
+        vertices[0] = centerX;
+        vertices[1] = centerY;
 
         for (int i = 0; i <= CircleSegments; i++)
         {
             float angle = (float)(2 * Math.PI * i / CircleSegments);
-            vertices[(i + 1) * 2] = center.X + MathF.Cos(angle) * radius;
-            vertices[(i + 1) * 2 + 1] = center.Y + MathF.Sin(angle) * radius;
+            vertices[(i + 1) * 2] = centerX + MathF.Cos(angle) * radiusF;
+            vertices[(i + 1) * 2 + 1] = centerY + MathF.Sin(angle) * radiusF;
         }
 
         GL.BindVertexArray(_vao);
@@ -293,33 +295,35 @@ public abstract class GraphicsWindow : GameWindow
         GL.BindVertexArray(0);
     }
 
-    protected void DrawBox(ArtemisEngine.Vector2 center, float width, float height, float rotation, Color4 color, bool filled = true)
+    protected void DrawBox(Vector2 center, double width, double height, double rotation, Color4 color, bool filled = true)
     {
         int colorLoc = GL.GetUniformLocation(_shaderProgram, "color");
         GL.Uniform4(colorLoc, color);
 
-        float hw = width / 2;
-        float hh = height / 2;
+        float centerX = (float)center.X;
+        float centerY = (float)center.Y;
+        float hw = (float)(width / 2);
+        float hh = (float)(height / 2);
 
         // Compute rotated corners
-        float cos = MathF.Cos(rotation);
-        float sin = MathF.Sin(rotation);
+        float cos = MathF.Cos((float)rotation);
+        float sin = MathF.Sin((float)rotation);
 
-        ArtemisEngine.Vector2[] corners = new ArtemisEngine.Vector2[4]
+        Vector2[] corners = new Vector2[4]
         {
-            new ArtemisEngine.Vector2(-hw, -hh),
-            new ArtemisEngine.Vector2(hw, -hh),
-            new ArtemisEngine.Vector2(hw, hh),
-            new ArtemisEngine.Vector2(-hw, hh)
+            new Vector2(-hw, -hh),
+            new Vector2(hw, -hh),
+            new Vector2(hw, hh),
+            new Vector2(-hw, hh)
         };
 
         float[] vertices = new float[8];
         for (int i = 0; i < 4; i++)
         {
-            float rx = corners[i].X * cos - corners[i].Y * sin;
-            float ry = corners[i].X * sin + corners[i].Y * cos;
-            vertices[i * 2] = center.X + rx;
-            vertices[i * 2 + 1] = center.Y + ry;
+            float rx = (float)(corners[i].X * cos - corners[i].Y * sin);
+            float ry = (float)(corners[i].X * sin + corners[i].Y * cos);
+            vertices[i * 2] = centerX + rx;
+            vertices[i * 2 + 1] = centerY + ry;
         }
 
         GL.BindVertexArray(_vao);
@@ -338,15 +342,15 @@ public abstract class GraphicsWindow : GameWindow
         GL.BindVertexArray(0);
     }
 
-    protected void DrawLine(ArtemisEngine.Vector2 start, ArtemisEngine.Vector2 end, Color4 color, float lineWidth = 1f)
+    protected void DrawLine(Vector2 start, Vector2 end, Color4 color, float lineWidth = 1f)
     {
         int colorLoc = GL.GetUniformLocation(_shaderProgram, "color");
         GL.Uniform4(colorLoc, color);
 
         float[] vertices = new float[]
         {
-            start.X, start.Y,
-            end.X, end.Y
+            (float)start.X, (float)start.Y,
+            (float)end.X, (float)end.Y
         };
 
         GL.LineWidth(lineWidth);
@@ -361,17 +365,20 @@ public abstract class GraphicsWindow : GameWindow
         GL.LineWidth(1f);
     }
 
-    protected void DrawRing(ArtemisEngine.Vector2 center, float radius, Color4 color, float lineWidth = 2f)
+    protected void DrawRing(Vector2 center, double radius, Color4 color, float lineWidth = 2f)
     {
         int colorLoc = GL.GetUniformLocation(_shaderProgram, "color");
         GL.Uniform4(colorLoc, color);
 
         float[] vertices = new float[CircleSegments * 2];
+        float centerX = (float)center.X;
+        float centerY = (float)center.Y;
+        float radiusF = (float)radius;
         for (int i = 0; i < CircleSegments; i++)
         {
             float angle = (float)(2 * Math.PI * i / CircleSegments);
-            vertices[i * 2] = center.X + MathF.Cos(angle) * radius;
-            vertices[i * 2 + 1] = center.Y + MathF.Sin(angle) * radius;
+            vertices[i * 2] = centerX + MathF.Cos(angle) * radiusF;
+            vertices[i * 2 + 1] = centerY + MathF.Sin(angle) * radiusF;
         }
 
         GL.LineWidth(lineWidth);
@@ -386,7 +393,7 @@ public abstract class GraphicsWindow : GameWindow
         GL.LineWidth(1f);
     }
 
-    protected void DrawTrail(List<ArtemisEngine.Vector2> points, Color4 startColor, Color4 endColor)
+    protected void DrawTrail(List<Vector2> points, Color4 startColor, Color4 endColor)
     {
         if (points.Count < 2) return;
 
@@ -411,9 +418,10 @@ public abstract class GraphicsWindow : GameWindow
             DrawCircle(body.Position, circle.Radius, color);
 
             // Draw rotation indicator
-            ArtemisEngine.Vector2 dir = new ArtemisEngine.Vector2(
-                MathF.Cos(body.Rotation),
-                MathF.Sin(body.Rotation)
+            float rotation = (float)body.Rotation;
+            Vector2 dir = new Vector2(
+                MathF.Cos(rotation),
+                MathF.Sin(rotation)
             );
             DrawLine(body.Position, body.Position + dir * circle.Radius * 0.8f, Color4.White, 1f);
         }

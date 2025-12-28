@@ -1,3 +1,127 @@
+#if true
+using System;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
+
+namespace Artemis.Compute
+{
+    public static class SimdHelpers
+    {
+        public static readonly bool HasAvx512 = false;
+        public static readonly bool HasAvx2 = false;
+        public static readonly bool HasAvx = false;
+        public static readonly bool HasSse = false;
+        public static readonly bool HasNeon = false;
+        public static readonly bool HasArm64AdvSimd = false;
+        public static readonly int OptimalSimdWidth = Vector<float>.Count;
+        public static string SimdCapabilities => $"Generic SIMD ({Vector<float>.Count} floats)";
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void Add(float[] a, float[] b, float[] result, int count)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                result[i] = a[i] + b[i];
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void MultiplyAdd(float[] a, float scalar, float[] c, float[] result, int count)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                result[i] = a[i] * scalar + c[i];
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void MultiplyAddInPlace(float[] arr, float scalar, float addend, int count)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                arr[i] = arr[i] * scalar + addend;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void ComputeDistancesSq(
+            float[] posX, float[] posY, float[] posZ,
+            float[] refX, float[] refY, float[] refZ,
+            float[] output, int count)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                float dx = posX[i] - refX[i];
+                float dy = posY[i] - refY[i];
+                float dz = posZ[i] - refZ[i];
+                output[i] = dx * dx + dy * dy + dz * dz;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void IntegrateVelocities(
+            float[] velX, float[] velY, float[] velZ,
+            float[] forceX, float[] forceY, float[] forceZ,
+            float invMass, float dt, int count)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                velX[i] += forceX[i] * invMass * dt;
+                velY[i] += forceY[i] * invMass * dt;
+                velZ[i] += forceZ[i] * invMass * dt;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void IntegratePositions(
+            float[] posX, float[] posY, float[] posZ,
+            float[] velX, float[] velY, float[] velZ,
+            float dt, int count)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                posX[i] += velX[i] * dt;
+                posY[i] += velY[i] * dt;
+                posZ[i] += velZ[i] * dt;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void ComputePoly6Kernel(
+            float[] distSq, float[] output,
+            float smoothingRadius, float smoothingRadiusSq,
+            float poly6Coeff, int count)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                float diff = smoothingRadiusSq - distSq[i];
+                output[i] = diff > 0 ? poly6Coeff * diff * diff * diff : 0f;
+            }
+        }
+
+        public static void ParallelIntegrate(
+            float[] posX, float[] posY, float[] posZ,
+            float[] velX, float[] velY, float[] velZ,
+            float dt, int count, int batchSize = 1024)
+        {
+            int batchCount = (count + batchSize - 1) / batchSize;
+            Parallel.For(0, batchCount, batchIndex =>
+            {
+                int start = batchIndex * batchSize;
+                int end = Math.Min(start + batchSize, count);
+
+                for (int i = start; i < end; i++)
+                {
+                    posX[i] += velX[i] * dt;
+                    posY[i] += velY[i] * dt;
+                    posZ[i] += velZ[i] * dt;
+                }
+            });
+        }
+    }
+}
+#else
 using System;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -21,7 +145,11 @@ namespace Artemis.Compute
         /// <summary>
         /// Whether AVX-512 is supported.
         /// </summary>
+#if NET8_0_OR_GREATER
         public static readonly bool HasAvx512 = Avx512F.IsSupported;
+#else
+        public static readonly bool HasAvx512 = false;
+#endif
 
         /// <summary>
         /// Whether AVX2 is supported.
@@ -82,18 +210,23 @@ namespace Artemis.Compute
         /// Adds two float arrays element-wise using the best available SIMD.
         /// result[i] = a[i] + b[i]
         /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
         public static void Add(float[] a, float[] b, float[] result, int count)
         {
             int i = 0;
 
-            if (HasAvx512 && count >= 16)
+            if (HasAvx && count >= 8)
             {
-                AddAvx512(a, b, result, count, ref i);
-            }
-            else if (HasAvx && count >= 8)
-            {
-                AddAvx(a, b, result, count, ref i);
+#if NET8_0_OR_GREATER
+                if (HasAvx512 && count >= 16)
+                {
+                    AddAvx512(a, b, result, count, ref i);
+                }
+                else
+#endif
+                {
+                    AddAvx(a, b, result, count, ref i);
+                }
             }
             else if (HasNeon && count >= 4)
             {
@@ -111,6 +244,7 @@ namespace Artemis.Compute
             }
         }
 
+#if NET8_0_OR_GREATER
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void AddAvx512(float[] a, float[] b, float[] result, int count, ref int i)
         {
@@ -122,6 +256,7 @@ namespace Artemis.Compute
                 Avx512F.Store(ref result[i], vr);
             }
         }
+#endif
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void AddAvx(float[] a, float[] b, float[] result, int count, ref int i)
@@ -167,7 +302,7 @@ namespace Artemis.Compute
         /// Performs fused multiply-add: result[i] = a[i] * b + c[i]
         /// Uses FMA instructions when available for better precision and performance.
         /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
         public static void MultiplyAdd(float[] a, float scalar, float[] c, float[] result, int count)
         {
             int i = 0;
@@ -206,7 +341,7 @@ namespace Artemis.Compute
         /// <summary>
         /// In-place multiply-add: arr[i] = arr[i] * scalar + addend
         /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
         public static void MultiplyAddInPlace(float[] arr, float scalar, float addend, int count)
         {
             int i = 0;
@@ -248,7 +383,7 @@ namespace Artemis.Compute
         /// Computes squared distances between particle pairs.
         /// Optimized for spatial hash collision detection.
         /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
         public static void ComputeDistancesSq(
             float[] x1, float[] y1, float[] z1,
             float[] x2, float[] y2, float[] z2,
@@ -306,7 +441,7 @@ namespace Artemis.Compute
         /// High-performance particle velocity integration.
         /// Updates velocity arrays with gravity and damping.
         /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
         public static void IntegrateVelocities(
             float[] velX, float[] velY, float[] velZ,
             float gravityX, float gravityY, float gravityZ,
@@ -383,7 +518,7 @@ namespace Artemis.Compute
         /// High-performance particle position integration.
         /// Updates position arrays based on velocity.
         /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
         public static void IntegratePositions(
             float[] posX, float[] posY, float[] posZ,
             float[] velX, float[] velY, float[] velZ,
@@ -453,7 +588,7 @@ namespace Artemis.Compute
         /// Computes the Poly6 kernel for SPH density calculation.
         /// W(r, h) = 315 / (64 * pi * h^9) * (h^2 - r^2)^3
         /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
         public static void ComputePoly6Kernel(
             float[] distSq, float[] result, float hSq, float poly6Coeff, int count)
         {
@@ -525,7 +660,7 @@ namespace Artemis.Compute
         /// Parallel SIMD integration for massive particle counts.
         /// Splits work across multiple threads, each using SIMD.
         /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
         public static void ParallelIntegrate(
             float[] posX, float[] posY, float[] posZ,
             float[] velX, float[] velY, float[] velZ,
@@ -568,7 +703,7 @@ namespace Artemis.Compute
             });
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
         private static void IntegrateChunk(
             ref float posX, ref float posY, ref float posZ,
             ref float velX, ref float velY, ref float velZ,
@@ -705,3 +840,5 @@ namespace Artemis.Compute
         #endregion
     }
 }
+
+#endif

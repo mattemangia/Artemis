@@ -73,12 +73,30 @@ namespace Artemis.Physics2D
         }
 
         /// <summary>
+        /// Gets the magnitude (length) of the vector. Alias for Magnitude.
+        /// </summary>
+        public readonly double Length
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => Magnitude;
+        }
+
+        /// <summary>
         /// Gets the squared magnitude of the vector (faster than Magnitude).
         /// </summary>
         public readonly double MagnitudeSquared
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get => X * X + Y * Y;
+        }
+
+        /// <summary>
+        /// Gets the squared magnitude of the vector. Alias for MagnitudeSquared.
+        /// </summary>
+        public readonly double LengthSquared
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => MagnitudeSquared;
         }
 
         /// <summary>

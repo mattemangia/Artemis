@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
+    <NoWarn>$(NoWarn);CS0108;CS0414;CS0649;CS0169;CS0675;CS1591;CS8602;CS8618</NoWarn>
 
     <!-- Package Information -->
     <PackageId>Artemis.Physics</PackageId>

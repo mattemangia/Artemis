@@ -1,4 +1,3 @@
-using ArtemisEngine;
 
 namespace AdvancedPhysicsDemo;
 
@@ -72,7 +71,7 @@ public class AdvancedRenderer
         }
     }
 
-    public void DrawCircle(Vector2 center, float radius, char c, ConsoleColor color, bool filled = true)
+    public void DrawCircle(Vector2 center, double radius, char c, ConsoleColor color, bool filled = true)
     {
         Vector2 screenPos = WorldToScreen(center);
         int screenRadius = (int)(radius * _scale);
@@ -99,7 +98,7 @@ public class AdvancedRenderer
         }
     }
 
-    public void DrawBox(Vector2 center, float width, float height, char c, ConsoleColor color, bool filled = true)
+    public void DrawBox(Vector2 center, double width, double height, char c, ConsoleColor color, bool filled = true)
     {
         Vector2 screenPos = WorldToScreen(center);
         int screenWidth = (int)(width * _scale);
@@ -155,7 +154,6 @@ public class AdvancedRenderer
 
         ConsoleColor color = joint switch
         {
-            SpringJoint => ConsoleColor.Green,
             DistanceJoint => ConsoleColor.Cyan,
             RevoluteJoint => ConsoleColor.Magenta,
             RopeJoint => ConsoleColor.Yellow,

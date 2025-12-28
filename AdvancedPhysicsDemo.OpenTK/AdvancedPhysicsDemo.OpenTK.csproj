@@ -5,10 +5,11 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <NoWarn>$(NoWarn);CS8602</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ArtemisEngine\ArtemisEngine.csproj" />
+    <ProjectReference Include="..\src\Artemis\Artemis.csproj" />
     <ProjectReference Include="..\Artemis.Graphics\Artemis.Graphics.csproj" />
     <ProjectReference Include="..\AdvancedPhysicsDemo\AdvancedPhysicsDemo.csproj" />
   </ItemGroup>

@@ -13,7 +13,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ArtemisEngine\ArtemisEngine.csproj" />
+    <ProjectReference Include="..\src\Artemis\Artemis.csproj" />
   </ItemGroup>
 
 </Project>

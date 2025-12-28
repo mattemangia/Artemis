@@ -94,6 +94,28 @@ namespace Artemis.Physics2D
         /// <summary>Whether to use continuous collision detection.</summary>
         public bool UseCCD { get; set; } = true;
 
+        private bool _useAdvancedSolver;
+
+        /// <summary>Enable advanced solver settings for higher stability.</summary>
+        public bool UseAdvancedSolver
+        {
+            get => _useAdvancedSolver;
+            set
+            {
+                _useAdvancedSolver = value;
+                if (value)
+                {
+                    VelocityIterations = 12;
+                    PositionIterations = 6;
+                }
+                else
+                {
+                    VelocityIterations = 8;
+                    PositionIterations = 3;
+                }
+            }
+        }
+
         #endregion
 
         #region Events
@@ -115,6 +137,48 @@ namespace Artemis.Physics2D
 
         /// <summary>Raised when a trigger is exited.</summary>
         public event EventHandler<CollisionEvent2D>? TriggerExit;
+
+        /// <summary>Compatibility event for collision begin.</summary>
+        public event EventHandler<CollisionEvent2D>? OnCollisionEnter
+        {
+            add => CollisionBegin += value;
+            remove => CollisionBegin -= value;
+        }
+
+        /// <summary>Compatibility event for collision end.</summary>
+        public event EventHandler<CollisionEvent2D>? OnCollisionExit
+        {
+            add => CollisionEnd += value;
+            remove => CollisionEnd -= value;
+        }
+
+        /// <summary>Compatibility event for pre-solve.</summary>
+        public event EventHandler<CollisionEvent2D>? OnPreSolve
+        {
+            add => PreSolve += value;
+            remove => PreSolve -= value;
+        }
+
+        /// <summary>Compatibility event for post-solve.</summary>
+        public event EventHandler<CollisionEvent2D>? OnPostSolve
+        {
+            add => PostSolve += value;
+            remove => PostSolve -= value;
+        }
+
+        /// <summary>Compatibility event for trigger enter.</summary>
+        public event EventHandler<CollisionEvent2D>? OnTriggerEnter
+        {
+            add => TriggerEnter += value;
+            remove => TriggerEnter -= value;
+        }
+
+        /// <summary>Compatibility event for trigger exit.</summary>
+        public event EventHandler<CollisionEvent2D>? OnTriggerExit
+        {
+            add => TriggerExit += value;
+            remove => TriggerExit -= value;
+        }
 
         #endregion
 
@@ -287,7 +351,7 @@ namespace Artemis.Physics2D
 
                     foreach (var manifold in _manifolds)
                     {
-                        if (manifold.IsActive)
+                        if (manifold.IsActive && !manifold.IsTrigger)
                             CollisionResolver2D.ResolveCollision(manifold);
                     }
                 }
@@ -307,7 +371,7 @@ namespace Artemis.Physics2D
 
                     foreach (var manifold in _manifolds)
                     {
-                        if (manifold.IsActive)
+                        if (manifold.IsActive && !manifold.IsTrigger)
                             CollisionResolver2D.CorrectPositions(manifold);
                     }
 
@@ -317,7 +381,7 @@ namespace Artemis.Physics2D
                 // Phase 10: Post-solve events
                 foreach (var manifold in _manifolds)
                 {
-                    if (manifold.IsActive)
+                    if (manifold.IsActive && !manifold.IsTrigger)
                         PostSolve?.Invoke(this, new CollisionEvent2D(manifold.BodyA, manifold.BodyB, manifold));
                 }
 
@@ -369,13 +433,16 @@ namespace Artemis.Physics2D
         {
             int cx = (int)Math.Floor(pos.X * _invCellSize);
             int cy = (int)Math.Floor(pos.Y * _invCellSize);
-            return ((long)(cx & 0x7FFFFFFF) << 32) | (uint)(cy & 0x7FFFFFFF);
+            return GetCellKey(cx, cy);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private long GetCellKey(int cx, int cy)
         {
-            return ((long)(cx & 0x7FFFFFFF) << 32) | (uint)(cy & 0x7FFFFFFF);
+            unchecked
+            {
+                return ((long)(uint)cx << 32) | (uint)cy;
+            }
         }
 
         #endregion
@@ -393,7 +460,7 @@ namespace Artemis.Physics2D
                 var indices = cell.Value;
                 long cellKey = cell.Key;
                 int cx = (int)(cellKey >> 32);
-                int cy = (int)(cellKey & 0x7FFFFFFF);
+                int cy = unchecked((int)cellKey);
 
                 // Check within cell
                 for (int i = 0; i < indices.Count; i++)
@@ -476,6 +543,7 @@ namespace Artemis.Physics2D
                 if (hasCollision)
                 {
                     manifold.IsActive = true;
+                    manifold.IsTrigger = a.IsTrigger || b.IsTrigger;
                     _detectedCollisions.Add(manifold);
                 }
             });
@@ -489,20 +557,29 @@ namespace Artemis.Physics2D
                 {
                     _manifoldCache[key] = manifold;
                     _manifolds.Add(manifold);
-                    CollisionBegin?.Invoke(this, new CollisionEvent2D(manifold.BodyA, manifold.BodyB, manifold));
+                    if (manifold.IsTrigger)
+                        TriggerEnter?.Invoke(this, new CollisionEvent2D(manifold.BodyA, manifold.BodyB, manifold));
+                    else
+                        CollisionBegin?.Invoke(this, new CollisionEvent2D(manifold.BodyA, manifold.BodyB, manifold));
                 }
                 else
                 {
                     var cached = _manifoldCache[key];
-                    cached.Normal = manifold.Normal;
-                    cached.Penetration = manifold.Penetration;
                     cached.ContactCount = manifold.ContactCount;
+                    for (int i = 0; i < manifold.ContactCount; i++)
+                    {
+                        cached.Contacts[i] = manifold.Contacts[i];
+                    }
+                    cached.Friction = manifold.Friction;
+                    cached.Restitution = manifold.Restitution;
                     cached.IsActive = true;
+                    cached.IsTrigger = manifold.IsTrigger;
                 }
 
                 manifold.BodyA.WakeUp();
                 manifold.BodyB.WakeUp();
-                PreSolve?.Invoke(this, new CollisionEvent2D(manifold.BodyA, manifold.BodyB, manifold));
+                if (!manifold.IsTrigger)
+                    PreSolve?.Invoke(this, new CollisionEvent2D(manifold.BodyA, manifold.BodyB, manifold));
             }
 
             // Clean up ended collisions
@@ -511,7 +588,10 @@ namespace Artemis.Physics2D
                 var manifold = _manifolds[i];
                 if (!manifold.IsActive)
                 {
-                    CollisionEnd?.Invoke(this, new CollisionEvent2D(manifold.BodyA, manifold.BodyB, manifold));
+                    if (manifold.IsTrigger)
+                        TriggerExit?.Invoke(this, new CollisionEvent2D(manifold.BodyA, manifold.BodyB, manifold));
+                    else
+                        CollisionEnd?.Invoke(this, new CollisionEvent2D(manifold.BodyA, manifold.BodyB, manifold));
                     var key = GetManifoldKey(manifold.BodyA, manifold.BodyB);
                     _manifoldCache.Remove(key);
                     _manifolds.RemoveAt(i);
@@ -687,6 +767,14 @@ namespace Artemis.Physics2D
             return closestHit;
         }
 
+        /// <summary>
+        /// Casts a ray and returns the closest hit.
+        /// </summary>
+        public RaycastHit2D Raycast(Ray2D ray, ushort maskBits = 0xFFFF)
+        {
+            return Raycaster2D.Raycast(ray, Bodies, maskBits);
+        }
+
         #endregion
 
         #region Utility Methods
@@ -784,7 +872,7 @@ namespace Artemis.Physics2D
             // Already overlapping
             if (c < 0)
             {
-                return CollisionDetector2D.CircleVsCircle(bodyA, bodyB, circleA, circleB, manifold);
+                return CollisionDetector2D.CircleVsCircle(bodyA, bodyB, manifold);
             }
 
             if (Math.Abs(a) < 1e-8)
@@ -801,7 +889,7 @@ namespace Artemis.Physics2D
                 return false;
 
             // Collision will happen, use discrete detection at TOI
-            return CollisionDetector2D.CircleVsCircle(bodyA, bodyB, circleA, circleB, manifold);
+            return CollisionDetector2D.CircleVsCircle(bodyA, bodyB, manifold);
         }
     }
 }

@@ -1,5 +1,4 @@
 using Artemis.Graphics;
-using ArtemisEngine;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.GraphicsLibraryFramework;
 using PhysicsCatapultDemo;
@@ -40,8 +39,8 @@ public class CatapultWindow : GraphicsWindow
 
     protected override void Initialize()
     {
-        World = new PhysicsWorld(new ArtemisEngine.Vector2(0, -20f));
-        _catapult = new Catapult(new ArtemisEngine.Vector2(5, 8));
+        World = new PhysicsWorld(new Vector2(0, -20f));
+        _catapult = new Catapult(new Vector2(5, 8));
 
         // Camera position
         CameraPosition = new Vector2d(30, 15);
@@ -79,7 +78,7 @@ public class CatapultWindow : GraphicsWindow
 
     private float GetAimAngle()
     {
-        return MathF.Atan2(-_catapult.AimDirection.Y, _catapult.AimDirection.X) * 180f / MathF.PI;
+        return (float)(Math.Atan2(-_catapult.AimDirection.Y, _catapult.AimDirection.X) * 180.0 / Math.PI);
     }
 
     private void LaunchProjectile()
@@ -127,7 +126,7 @@ public class CatapultWindow : GraphicsWindow
         {
             if (obj.Type == GameObjectType.Block && obj.Body.Velocity.Length > 5f)
             {
-                float damage = obj.Body.Velocity.Length * 2f;
+                float damage = (float)obj.Body.Velocity.Length * 2f;
                 obj.TakeDamage(damage * deltaTime);
             }
         }
@@ -213,12 +212,12 @@ public class CatapultWindow : GraphicsWindow
         DrawCircle(_catapult.Position, 1.2f, new Color4(0.3f, 0.1f, 0.3f, 1f), false);
 
         // Draw aim line
-        ArtemisEngine.Vector2 aimEnd = _catapult.Position + _catapult.AimDirection * 8f;
+        Vector2 aimEnd = _catapult.Position + _catapult.AimDirection * 8f;
         DrawLine(_catapult.Position, aimEnd, new Color4(1f, 1f, 0.2f, 0.8f), 2f);
 
         // Draw power indicator
         float powerRatio = (_catapult.Power - _catapult.MinPower) / (_catapult.MaxPower - _catapult.MinPower);
-        ArtemisEngine.Vector2 powerEnd = _catapult.Position + _catapult.AimDirection * (3f + powerRatio * 5f);
+        Vector2 powerEnd = _catapult.Position + _catapult.AimDirection * (3f + powerRatio * 5f);
         DrawLine(_catapult.Position, powerEnd, new Color4(1f, powerRatio, 0f, 1f), 3f);
 
         // Draw trajectory preview (simple arc)
@@ -229,7 +228,7 @@ public class CatapultWindow : GraphicsWindow
         if (blockCount == 0)
         {
             // Draw level complete indicator
-            DrawCircle(new ArtemisEngine.Vector2((float)CameraPosition.X, (float)CameraPosition.Y + 5f), 3f,
+            DrawCircle(new Vector2((float)CameraPosition.X, (float)CameraPosition.Y + 5f), 3f,
                 new Color4(0.2f, 0.9f, 0.2f, 0.5f), true);
         }
     }
@@ -239,11 +238,11 @@ public class CatapultWindow : GraphicsWindow
         const int points = 30;
         const float timeStep = 0.05f;
 
-        ArtemisEngine.Vector2 pos = _catapult.Position + _catapult.AimDirection * 2f;
-        ArtemisEngine.Vector2 vel = _catapult.AimDirection * _catapult.Power;
-        ArtemisEngine.Vector2 gravity = new ArtemisEngine.Vector2(0, -20f);
+        Vector2 pos = _catapult.Position + _catapult.AimDirection * 2f;
+        Vector2 vel = _catapult.AimDirection * _catapult.Power;
+        Vector2 gravity = new Vector2(0, -20f);
 
-        List<ArtemisEngine.Vector2> trajectory = new() { pos };
+        List<Vector2> trajectory = new() { pos };
 
         for (int i = 0; i < points; i++)
         {

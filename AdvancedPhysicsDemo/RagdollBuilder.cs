@@ -1,4 +1,3 @@
-using ArtemisEngine;
 
 namespace AdvancedPhysicsDemo;
 
@@ -50,35 +49,35 @@ public class RagdollBuilder
         world.AddBody(head);
 
         // Torso
-        var torso = new RigidBody(position + new Vector2(0, 1.2f), 5.0f, new BoxShape(1.0f, 1.5f));
+        var torso = new RigidBody(position + new Vector2(0, 1.2f), 5.0f, new BoxShape(0.5f, 0.75f));
         torso.Friction = 0.5f;
         torso.Restitution = 0.2f;
         torso.CollisionLayer = CollisionLayers.Enemy;
         world.AddBody(torso);
 
         // Left Arm
-        var leftArm = new RigidBody(position + new Vector2(-0.8f, 1.5f), 1.5f, new BoxShape(0.3f, 1.2f));
+        var leftArm = new RigidBody(position + new Vector2(-0.8f, 1.5f), 1.5f, new BoxShape(0.15f, 0.6f));
         leftArm.Friction = 0.5f;
         leftArm.Restitution = 0.2f;
         leftArm.CollisionLayer = CollisionLayers.Enemy;
         world.AddBody(leftArm);
 
         // Right Arm
-        var rightArm = new RigidBody(position + new Vector2(0.8f, 1.5f), 1.5f, new BoxShape(0.3f, 1.2f));
+        var rightArm = new RigidBody(position + new Vector2(0.8f, 1.5f), 1.5f, new BoxShape(0.15f, 0.6f));
         rightArm.Friction = 0.5f;
         rightArm.Restitution = 0.2f;
         rightArm.CollisionLayer = CollisionLayers.Enemy;
         world.AddBody(rightArm);
 
         // Left Leg
-        var leftLeg = new RigidBody(position + new Vector2(-0.3f, 0.0f), 2.0f, new BoxShape(0.4f, 1.5f));
+        var leftLeg = new RigidBody(position + new Vector2(-0.3f, 0.0f), 2.0f, new BoxShape(0.2f, 0.75f));
         leftLeg.Friction = 0.6f;
         leftLeg.Restitution = 0.2f;
         leftLeg.CollisionLayer = CollisionLayers.Enemy;
         world.AddBody(leftLeg);
 
         // Right Leg
-        var rightLeg = new RigidBody(position + new Vector2(0.3f, 0.0f), 2.0f, new BoxShape(0.4f, 1.5f));
+        var rightLeg = new RigidBody(position + new Vector2(0.3f, 0.0f), 2.0f, new BoxShape(0.2f, 0.75f));
         rightLeg.Friction = 0.6f;
         rightLeg.Restitution = 0.2f;
         rightLeg.CollisionLayer = CollisionLayers.Enemy;

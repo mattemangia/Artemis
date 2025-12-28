@@ -1,4 +1,3 @@
-using ArtemisEngine;
 using PhysicsCatapultDemo;
 
 class Program
@@ -129,7 +128,7 @@ class Game
 
     private float GetAimAngle()
     {
-        return MathF.Atan2(-_catapult.AimDirection.Y, _catapult.AimDirection.X) * 180f / MathF.PI;
+        return (float)(Math.Atan2(-_catapult.AimDirection.Y, _catapult.AimDirection.X) * 180.0 / Math.PI);
     }
 
     private void LaunchProjectile()
@@ -194,7 +193,7 @@ class Game
         {
             if (obj.Type == GameObjectType.Block && obj.Body.Velocity.Length > 5f)
             {
-                float damage = obj.Body.Velocity.Length * 2f;
+                float damage = (float)obj.Body.Velocity.Length * 2f;
                 obj.TakeDamage(damage * FixedTimeStep);
             }
         }

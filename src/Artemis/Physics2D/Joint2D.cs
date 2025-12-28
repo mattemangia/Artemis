@@ -75,6 +75,13 @@ namespace Artemis.Physics2D
         /// <summary>Frequency for soft constraint (0 = rigid).</summary>
         public double Frequency { get; set; }
 
+        /// <summary>Stiffness alias for Frequency.</summary>
+        public double Stiffness
+        {
+            get => Frequency;
+            set => Frequency = value;
+        }
+
         /// <summary>Damping ratio for soft constraint (0-1).</summary>
         public double DampingRatio { get; set; } = 0.7;
 
@@ -210,6 +217,57 @@ namespace Artemis.Physics2D
     }
 
     /// <summary>
+    /// Spring joint - distance joint with stiffness/damping parameters.
+    /// </summary>
+    public class SpringJoint2D : DistanceJoint2D
+    {
+        private double _stiffness;
+        private double _damping;
+
+        public double Stiffness
+        {
+            get => _stiffness;
+            set
+            {
+                _stiffness = value;
+                UpdateSpringSettings();
+            }
+        }
+
+        public double Damping
+        {
+            get => _damping;
+            set
+            {
+                _damping = value;
+                UpdateSpringSettings();
+            }
+        }
+
+        public SpringJoint2D(RigidBody2D bodyA, RigidBody2D bodyB, double restLength, double stiffness, double damping, string? id = null)
+            : base(bodyA, bodyB, bodyA.Position, bodyB.Position, id)
+        {
+            Length = restLength;
+            _stiffness = stiffness;
+            _damping = damping;
+            UpdateSpringSettings();
+        }
+
+        private void UpdateSpringSettings()
+        {
+            if (_stiffness <= 0)
+            {
+                Frequency = 0;
+                DampingRatio = 0;
+                return;
+            }
+
+            Frequency = Math.Sqrt(_stiffness) / (2 * Math.PI);
+            DampingRatio = Math.Clamp(_damping / (2 * Math.Sqrt(_stiffness)), 0, 1);
+        }
+    }
+
+    /// <summary>
     /// Revolute joint - allows rotation around a single point.
     /// </summary>
     public class RevoluteJoint2D : Joint2D
@@ -222,6 +280,9 @@ namespace Artemis.Physics2D
 
         /// <summary>Reference angle between bodies.</summary>
         public double ReferenceAngle { get; set; }
+
+        /// <summary>Stiffness factor for the joint constraint.</summary>
+        public double Stiffness { get; set; } = 1.0;
 
         /// <summary>Whether angle limits are enabled.</summary>
         public bool EnableLimit { get; set; }
@@ -361,7 +422,7 @@ namespace Artemis.Physics2D
             var vB = BodyB != null ? BodyB.Velocity + Vector2D.Cross(BodyB.AngularVelocity, _rB) : Vector2D.Zero;
             var Cdot2 = vB - vA;
 
-            var impulse2 = SolveMatrix(-Cdot2);
+            var impulse2 = SolveMatrix(-Cdot2) * Stiffness;
             _impulse += impulse2;
 
             BodyA.Velocity -= impulse2 * BodyA.InverseMass;
@@ -414,7 +475,7 @@ namespace Artemis.Physics2D
             var impulse = new Vector2D(
                 -invDet * (K[1, 1] * C.X - K[0, 1] * C.Y),
                 -invDet * (K[0, 0] * C.Y - K[1, 0] * C.X)
-            );
+            ) * Stiffness;
 
             BodyA.Position -= impulse * mA;
             BodyA.Rotation -= iA * Vector2D.Cross(rA, impulse);
@@ -773,6 +834,9 @@ namespace Artemis.Physics2D
         /// <summary>Maximum length of the rope.</summary>
         public double MaxLength { get; set; }
 
+        /// <summary>Stiffness factor for the rope constraint.</summary>
+        public double Stiffness { get; set; } = 1.0;
+
         // Solver temp
         private Vector2D _u;
         private Vector2D _rA;
@@ -789,6 +853,11 @@ namespace Artemis.Physics2D
             LocalAnchorA = bodyA.WorldToLocal(anchorA);
             LocalAnchorB = bodyB.WorldToLocal(anchorB);
             MaxLength = maxLength;
+        }
+
+        public RopeJoint2D(RigidBody2D bodyA, RigidBody2D bodyB, double maxLength, string? id = null)
+            : this(bodyA, bodyB, bodyA.Position, bodyB.Position, maxLength, id)
+        {
         }
 
         public override void PreSolve(double dt)
@@ -836,7 +905,7 @@ namespace Artemis.Physics2D
             var vB = BodyB.Velocity + Vector2D.Cross(BodyB.AngularVelocity, _rB);
 
             double Cdot = Vector2D.Dot(_u, vB - vA);
-            double impulse = -_mass * Cdot;
+            double impulse = -_mass * Cdot * Stiffness;
 
             // Only pull, never push
             double oldImpulse = _impulse;
@@ -872,7 +941,7 @@ namespace Artemis.Physics2D
                              BodyA.InverseInertia * crA * crA +
                              BodyB.InverseInertia * crB * crB;
 
-            double impulse = invMass > 0 ? -C / invMass : 0;
+            double impulse = invMass > 0 ? -C / invMass * Stiffness : 0;
             var P = u * impulse;
 
             BodyA.Position -= P * BodyA.InverseMass;

@@ -1,5 +1,4 @@
 using Artemis.Graphics;
-using ArtemisEngine;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.GraphicsLibraryFramework;
 using AdvancedPhysicsDemo;
@@ -38,7 +37,7 @@ public class AdvancedPhysicsWindow : GraphicsWindow
 
     protected override void Initialize()
     {
-        World = new PhysicsWorld(new ArtemisEngine.Vector2(0, -20f));
+        World = new PhysicsWorld(new Vector2(0, -20f));
         World.UseAdvancedSolver = true;
 
         // Camera settings
@@ -54,7 +53,7 @@ public class AdvancedPhysicsWindow : GraphicsWindow
 
     private void CreateGround()
     {
-        _ground = new RigidBody(new ArtemisEngine.Vector2(20, 0), 0, new BoxShape(60, 1), isStatic: true);
+        _ground = new RigidBody(new Vector2(20, 0), 0, new BoxShape(30, 0.5f), isStatic: true);
         _ground.Friction = 0.8f;
         _ground.CollisionLayer = CollisionLayers.Static;
         World.AddBody(_ground);
@@ -107,14 +106,14 @@ public class AdvancedPhysicsWindow : GraphicsWindow
 
     private void LoadRagdollDemo()
     {
-        _ragdoll = RagdollBuilder.CreateRagdoll(World, new ArtemisEngine.Vector2(10, 5));
+        _ragdoll = RagdollBuilder.CreateRagdoll(World, new Vector2(10, 5));
 
         // Add some platforms
-        var platform1 = new RigidBody(new ArtemisEngine.Vector2(5, 3), 0, new BoxShape(6, 0.5f), isStatic: true);
+        var platform1 = new RigidBody(new Vector2(5, 3), 0, new BoxShape(3, 0.25f), isStatic: true);
         platform1.CollisionLayer = CollisionLayers.Static;
         World.AddBody(platform1);
 
-        var platform2 = new RigidBody(new ArtemisEngine.Vector2(20, 6), 0, new BoxShape(6, 0.5f), isStatic: true);
+        var platform2 = new RigidBody(new Vector2(20, 6), 0, new BoxShape(3, 0.25f), isStatic: true);
         platform2.Rotation = -0.2f;
         platform2.CollisionLayer = CollisionLayers.Static;
         World.AddBody(platform2);
@@ -122,10 +121,10 @@ public class AdvancedPhysicsWindow : GraphicsWindow
 
     private void LoadVehicleDemo()
     {
-        _vehicle = VehicleBuilder.CreateVehicle(World, new ArtemisEngine.Vector2(5, 5));
+        _vehicle = VehicleBuilder.CreateVehicle(World, new Vector2(5, 5));
 
         // Create ramp
-        var ramp = new RigidBody(new ArtemisEngine.Vector2(25, 2), 0, new BoxShape(10, 0.5f), isStatic: true);
+        var ramp = new RigidBody(new Vector2(25, 2), 0, new BoxShape(5, 0.25f), isStatic: true);
         ramp.Rotation = 0.3f;
         ramp.CollisionLayer = CollisionLayers.Static;
         World.AddBody(ramp);
@@ -133,7 +132,7 @@ public class AdvancedPhysicsWindow : GraphicsWindow
         // Create obstacles
         for (int i = 0; i < 5; i++)
         {
-            var box = new RigidBody(new ArtemisEngine.Vector2(35 + i * 1.5f, 1 + i * 0.5f), 2f, new BoxShape(1, 1));
+            var box = new RigidBody(new Vector2(35 + i * 1.5f, 1 + i * 0.5f), 2f, new BoxShape(0.5f, 0.5f));
             box.Friction = 0.5f;
             World.AddBody(box);
         }
@@ -141,10 +140,10 @@ public class AdvancedPhysicsWindow : GraphicsWindow
 
     private void LoadChainDemo()
     {
-        _chain = ChainBuilder.CreateChain(World, new ArtemisEngine.Vector2(10, 15), 10, 1.2f, isRope: false);
+        _chain = ChainBuilder.CreateChain(World, new Vector2(10, 15), 10, 1.2f, isRope: false);
 
         // Add a swinging weight
-        var weight = new RigidBody(new ArtemisEngine.Vector2(10, 3), 10f, new CircleShape(1.5f));
+        var weight = new RigidBody(new Vector2(10, 3), 10f, new CircleShape(1.5f));
         weight.Friction = 0.6f;
         World.AddBody(weight);
 
@@ -155,12 +154,12 @@ public class AdvancedPhysicsWindow : GraphicsWindow
 
     private void LoadBridgeDemo()
     {
-        _bridge = ChainBuilder.CreateBridge(World, new ArtemisEngine.Vector2(5, 8), 8, 2f);
+        _bridge = ChainBuilder.CreateBridge(World, new Vector2(5, 8), 8, 2f);
 
         // Add some balls to bounce on the bridge
         for (int i = 0; i < 3; i++)
         {
-            var ball = new RigidBody(new ArtemisEngine.Vector2(10 + i * 3, 12 + i * 2), 3f, new CircleShape(0.8f));
+            var ball = new RigidBody(new Vector2(10 + i * 3, 12 + i * 2), 3f, new CircleShape(0.8f));
             ball.Friction = 0.4f;
             ball.Restitution = 0.5f;
             World.AddBody(ball);
@@ -185,7 +184,7 @@ public class AdvancedPhysicsWindow : GraphicsWindow
             case 0: // Ragdoll
                 if (KeyboardState.IsKeyPressed(Keys.Space) && _ragdoll != null)
                 {
-                    _ragdoll.ApplyImpulseToAll(new ArtemisEngine.Vector2(50, 100));
+                    _ragdoll.ApplyImpulseToAll(new Vector2(50, 100));
                 }
                 break;
 
@@ -197,7 +196,7 @@ public class AdvancedPhysicsWindow : GraphicsWindow
                     if (KeyboardState.IsKeyDown(Keys.D))
                         _vehicle.ApplyAcceleration(50);
                     if (KeyboardState.IsKeyPressed(Keys.Space))
-                        _vehicle.Body.ApplyImpulse(new ArtemisEngine.Vector2(0, 200));
+                        _vehicle.Body.ApplyImpulse(new Vector2(0, 200));
                 }
                 break;
 
@@ -205,7 +204,7 @@ public class AdvancedPhysicsWindow : GraphicsWindow
                 if (KeyboardState.IsKeyPressed(Keys.Space) && _chain.Count > 1)
                 {
                     var lastBody = _chain.Last();
-                    lastBody.ApplyImpulse(new ArtemisEngine.Vector2(100, 0));
+                    lastBody.ApplyImpulse(new Vector2(100, 0));
                 }
                 break;
 
@@ -214,7 +213,7 @@ public class AdvancedPhysicsWindow : GraphicsWindow
                 {
                     // Drop a ball on the bridge
                     var ball = new RigidBody(
-                        new ArtemisEngine.Vector2(12 + Random.Shared.NextSingle() * 6, 15),
+                        new Vector2(12 + Random.Shared.NextSingle() * 6, 15),
                         5f, new CircleShape(0.6f));
                     ball.Restitution = 0.4f;
                     World.AddBody(ball);
@@ -253,9 +252,10 @@ public class AdvancedPhysicsWindow : GraphicsWindow
             {
                 DrawCircle(body.Position, circle.Radius, color);
                 // Draw rotation indicator
-                ArtemisEngine.Vector2 dir = new ArtemisEngine.Vector2(
-                    MathF.Cos(body.Rotation),
-                    MathF.Sin(body.Rotation)
+                float rotation = (float)body.Rotation;
+                Vector2 dir = new Vector2(
+                    MathF.Cos(rotation),
+                    MathF.Sin(rotation)
                 );
                 DrawLine(body.Position, body.Position + dir * circle.Radius * 0.8f, Color4.White);
             }
@@ -308,8 +308,8 @@ public class AdvancedPhysicsWindow : GraphicsWindow
 
     private void DrawJoint(Joint joint)
     {
-        ArtemisEngine.Vector2 posA = joint.BodyA.Position;
-        ArtemisEngine.Vector2 posB = joint.BodyB.Position;
+        Vector2 posA = joint.BodyA.Position;
+        Vector2 posB = joint.BodyB.Position;
 
         Color4 color = joint switch
         {

@@ -2,9 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
+#if !NETSTANDARD2_1
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
 using System.Runtime.Intrinsics.Arm;
+#endif
 using System.Threading;
 using System.Threading.Tasks;
 using System.Numerics;
@@ -64,10 +66,21 @@ namespace Artemis.Particles
         private SpinLock[] _particleLocks;
 
         // SIMD detection
+#if NETSTANDARD2_1
+        private static readonly bool HasAvx512 = false;
+        private static readonly bool HasAvx = false;
+        private static readonly bool HasNeon = false;
+        private static readonly bool HasArm64 = false;
+#else
+#if NET8_0_OR_GREATER
         private static readonly bool HasAvx512 = Avx512F.IsSupported;
+#else
+        private static readonly bool HasAvx512 = false;
+#endif
         private static readonly bool HasAvx = Avx.IsSupported;
         private static readonly bool HasNeon = AdvSimd.IsSupported;
         private static readonly bool HasArm64 = AdvSimd.Arm64.IsSupported;
+#endif
 
         #endregion
 

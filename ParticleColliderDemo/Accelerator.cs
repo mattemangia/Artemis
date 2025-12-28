@@ -1,5 +1,7 @@
 using Artemis.Physics2D;
 using Artemis.Physics2D.Particles;
+using ParticleEnergyTracker2D = Artemis.Physics2D.Particles.EnergyTracker2D;
+using ParticleSimulationDataExporter2D = Artemis.Physics2D.Particles.SimulationDataExporter2D;
 
 namespace ParticleColliderDemo;
 
@@ -129,8 +131,8 @@ public class CollisionExperiment
     public double SimulationTime { get; private set; }
     public int TotalCollisions { get; private set; }
 
-    private EnergyTracker2D _energyTracker = new();
-    private SimulationDataExporter2D _dataExporter = new();
+    private ParticleEnergyTracker2D _energyTracker = new();
+    private ParticleSimulationDataExporter2D _dataExporter = new();
 
     public CollisionExperiment(string name, Accelerator accelerator)
     {

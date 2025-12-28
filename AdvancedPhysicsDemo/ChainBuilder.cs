@@ -1,4 +1,3 @@
-using ArtemisEngine;
 
 namespace AdvancedPhysicsDemo;
 
@@ -14,7 +13,7 @@ public class ChainBuilder
         var joints = new List<Joint>();
 
         // Create first segment (fixed)
-        var firstShape = isRope ? (Shape)new CircleShape(0.3f) : new BoxShape(0.4f, segmentLength * 0.8f);
+        var firstShape = isRope ? (Shape)new CircleShape(0.3f) : new BoxShape(0.2f, segmentLength * 0.4f);
         var firstBody = new RigidBody(startPos, 0, firstShape, isStatic: true);
         firstBody.CollisionLayer = CollisionLayers.Static;
         bodies.Add(firstBody);
@@ -27,7 +26,7 @@ public class ChainBuilder
         {
             Vector2 position = startPos + new Vector2(0, -i * segmentLength);
 
-            Shape shape = isRope ? (Shape)new CircleShape(0.3f) : new BoxShape(0.4f, segmentLength * 0.8f);
+            Shape shape = isRope ? (Shape)new CircleShape(0.3f) : new BoxShape(0.2f, segmentLength * 0.4f);
             float mass = isRope ? 1.0f : 2.0f;
 
             var body = new RigidBody(position, mass, shape);
@@ -61,7 +60,7 @@ public class ChainBuilder
         var bodies = new List<RigidBody>();
 
         // Create fixed anchor on left
-        var leftAnchor = new RigidBody(startPos, 0, new BoxShape(0.5f, 0.5f), isStatic: true);
+        var leftAnchor = new RigidBody(startPos, 0, new BoxShape(0.25f, 0.25f), isStatic: true);
         leftAnchor.CollisionLayer = CollisionLayers.Static;
         bodies.Add(leftAnchor);
         world.AddBody(leftAnchor);
@@ -73,7 +72,7 @@ public class ChainBuilder
         {
             Vector2 position = startPos + new Vector2(i * segmentWidth, 0);
 
-            var shape = new BoxShape(segmentWidth * 0.9f, 0.3f);
+            var shape = new BoxShape(segmentWidth * 0.45f, 0.15f);
             var body = new RigidBody(position, 3.0f, shape);
             body.Friction = 0.6f;
             body.Restitution = 0.1f;
@@ -91,7 +90,7 @@ public class ChainBuilder
 
         // Create fixed anchor on right
         Vector2 rightPos = startPos + new Vector2((segments + 1) * segmentWidth, 0);
-        var rightAnchor = new RigidBody(rightPos, 0, new BoxShape(0.5f, 0.5f), isStatic: true);
+        var rightAnchor = new RigidBody(rightPos, 0, new BoxShape(0.25f, 0.25f), isStatic: true);
         rightAnchor.CollisionLayer = CollisionLayers.Static;
         bodies.Add(rightAnchor);
         world.AddBody(rightAnchor);
