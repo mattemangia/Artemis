@@ -2,19 +2,20 @@ using System;
 using System.Diagnostics;
 using System.Threading;
 using Artemis.Core;
+using Artemis.Demo;
 
 namespace Artemis.Demo
 {
     /// <summary>
-    /// Sand Tetris 3D - Console Demo
-    /// A physics-based puzzle game demonstrating the Artemis Physics Engine.
+    /// Sand Tetris 3D - Console Demo (Block Mode)
+    /// A physics-based puzzle game demonstrating the Artemis Physics Engine (2D Physics).
     /// </summary>
     class Program
     {
         private static SandTetris3D? _game;
         private static bool _running = true;
         private static double _dropX = 0;
-        private static double _dropZ = 0;
+        private static double _dropZ = 0; // Not used in logic but kept for consistency
         private static bool _waitingForSettle = false;
         private static int _settleFrames = 0;
         private const int SettleFramesRequired = 60;
@@ -26,18 +27,18 @@ namespace Artemis.Demo
 
             PrintTitle();
 
-            Console.WriteLine("\n🏖️  SAND TETRIS 3D - Artemis Physics Engine Demo");
+            Console.WriteLine("\n🏖️  SAND TETRIS 3D (BLOCKS) - Artemis Physics Engine Demo");
             Console.WriteLine("═══════════════════════════════════════════════════\n");
 
             Console.WriteLine("📋 RULES:");
-            Console.WriteLine("   • Drop sand balls into the terrarium");
-            Console.WriteLine("   • Same-colored sand connecting wall-to-wall disappears");
+            Console.WriteLine("   • Drop block clusters into the terrarium");
+            Console.WriteLine("   • Same-colored blocks connecting wall-to-wall disappear");
             Console.WriteLine("   • Create a hole at the bottom to WIN");
             Console.WriteLine("   • Fill up the terrarium and you LOSE\n");
 
             Console.WriteLine("🎮 CONTROLS:");
-            Console.WriteLine("   Arrow Keys: Move drop position (X/Z)");
-            Console.WriteLine("   SPACE/ENTER: Drop sand ball");
+            Console.WriteLine("   Left/Right Arrow Keys: Move drop position");
+            Console.WriteLine("   SPACE/ENTER: Drop block cluster");
             Console.WriteLine("   R: Reset game");
             Console.WriteLine("   Q: Quit\n");
 
@@ -92,30 +93,30 @@ namespace Artemis.Demo
                 HandleInput();
 
                 // Update physics
-                if (_waitingForSettle)
+                physicsAccumulator += deltaTime;
+                while (physicsAccumulator >= PhysicsStep)
                 {
-                    physicsAccumulator += deltaTime;
-                    while (physicsAccumulator >= PhysicsStep)
+                    _game.Update(PhysicsStep);
+                    physicsAccumulator -= PhysicsStep;
+
+                    if (_waitingForSettle)
                     {
-                        _game.Update(PhysicsStep);
-                        physicsAccumulator -= PhysicsStep;
                         _settleFrames++;
                     }
+                }
 
-                    // Check if settled
-                    if (_settleFrames >= SettleFramesRequired)
+                if (_waitingForSettle && _settleFrames >= SettleFramesRequired)
+                {
+                    int cleared = _game.CheckAndClearLines();
+                    _game.CheckGameState();
+
+                    if (!_game.IsGameOver)
                     {
-                        int cleared = _game.CheckAndClearLines();
-                        _game.CheckGameState();
-
-                        if (!_game.IsGameOver)
-                        {
-                            _game.NextTurn();
-                        }
-
-                        _waitingForSettle = false;
-                        _settleFrames = 0;
+                        _game.NextTurn();
                     }
+
+                    _waitingForSettle = false;
+                    _settleFrames = 0;
                 }
 
                 // Render
@@ -160,14 +161,6 @@ namespace Artemis.Demo
                     _dropX = Math.Min(_dropX + moveStep, 4.5);
                     break;
 
-                case ConsoleKey.UpArrow:
-                    _dropZ = Math.Max(_dropZ - moveStep, -4.5);
-                    break;
-
-                case ConsoleKey.DownArrow:
-                    _dropZ = Math.Min(_dropZ + moveStep, 4.5);
-                    break;
-
                 case ConsoleKey.Spacebar:
                 case ConsoleKey.Enter:
                     if (!_waitingForSettle && _game != null && !_game.IsGameOver)
@@ -200,24 +193,23 @@ namespace Artemis.Demo
             // Header
             Console.ForegroundColor = ConsoleColor.White;
             Console.WriteLine("╔══════════════════════════════════════════════════════════════════╗");
-            Console.WriteLine($"║  SAND TETRIS 3D                   Turn: {_game.Turn,-4} Score: {_game.Score,-8} ║");
+            Console.WriteLine($"║  SAND TETRIS 3D (BLOCKS)          Turn: {_game.Turn,-4} Score: {_game.Score,-8} ║");
             Console.WriteLine("╠══════════════════════════════════════════════════════════════════╣");
 
             // Current ball info
             var ball = _game.CurrentBall;
-            var (r, g, b) = SandTetris3D.GetRGB(ball.Color);
-            Console.Write("║  Next Ball: ");
+            Console.Write("║  Next Drop: ");
             Console.ForegroundColor = GetConsoleColor(ball.Color);
-            Console.Write($"● {ball.ColorName}");
+            Console.Write($"■ {ball.ColorName}");
             Console.ForegroundColor = ConsoleColor.White;
-            Console.WriteLine($" (Size: {ball.Radius:F1}, ~{ball.ParticleCount} particles)          ║");
+            Console.WriteLine($" (Size: {ball.Radius:F1}, ~{ball.ParticleCount} blocks)             ║");
 
             // Drop position
-            Console.WriteLine($"║  Drop Position: X={_dropX,5:F1}  Z={_dropZ,5:F1}                              ║");
+            Console.WriteLine($"║  Drop Position: X={_dropX,5:F1}                                        ║");
             Console.WriteLine("╠══════════════════════════════════════════════════════════════════╣");
 
-            // Terrarium view (simplified top-down)
-            RenderTerrariumTopDown();
+            // Terrarium view (simplified 2D)
+            RenderTerrarium();
 
             // Status
             Console.ForegroundColor = ConsoleColor.White;
@@ -226,7 +218,7 @@ namespace Artemis.Demo
             if (_waitingForSettle)
             {
                 Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine($"║  ⏳ Sand settling... ({_settleFrames}/{SettleFramesRequired})                               ║");
+                Console.WriteLine($"║  ⏳ Settling... ({_settleFrames}/{SettleFramesRequired})                                      ║");
             }
             else
             {
@@ -235,11 +227,11 @@ namespace Artemis.Demo
             }
 
             Console.ForegroundColor = ConsoleColor.White;
-            Console.WriteLine($"║  Particles: {_game.Simulation.ParticleCount,-6}                                          ║");
+            Console.WriteLine($"║  Blocks: {_game.ActiveParticleCount,-6}                                              ║");
             Console.WriteLine("╚══════════════════════════════════════════════════════════════════╝");
         }
 
-        static void RenderTerrariumTopDown()
+        static void RenderTerrarium()
         {
             if (_game == null) return;
 
@@ -258,53 +250,50 @@ namespace Artemis.Demo
                 }
             }
 
-            // Map particles to grid (top-down view, showing tallest particle at each position)
-            var bounds = _game.TerrariumBounds;
+            // Map blocks to grid
+            var bounds = (Min: new Artemis.Physics2D.Vector2D(-5, 0), Max: new Artemis.Physics2D.Vector2D(5, 15)); // Approx bounds
             double cellWidth = (bounds.Max.X - bounds.Min.X) / GridWidth;
-            double cellDepth = (bounds.Max.Z - bounds.Min.Z) / GridHeight;
+            double cellHeight = (bounds.Max.Y - bounds.Min.Y) / GridHeight;
 
-            foreach (var particle in _game.Simulation.Particles)
+            foreach (var body in _game.World.Bodies)
             {
-                if (!particle.IsActive) continue;
+                if (!body.IsActive || body.BodyType == Artemis.Physics2D.BodyType2D.Static) continue;
 
-                int gx = (int)((particle.Position.X - bounds.Min.X) / cellWidth);
-                int gz = (int)((particle.Position.Z - bounds.Min.Z) / cellDepth);
+                int gx = (int)((body.Position.X - bounds.Min.X) / cellWidth);
+                int gy = (int)((body.Position.Y - bounds.Min.Y) / cellHeight);
 
-                gx = Math.Clamp(gx, 0, GridWidth - 1);
-                gz = Math.Clamp(gz, 0, GridHeight - 1);
+                // Flip Y for console rendering (row 0 is top)
+                int consoleRow = GridHeight - 1 - gy;
 
-                // Use density to determine character
-                double heightRatio = particle.Position.Y / bounds.Max.Y;
-                char c = heightRatio > 0.8 ? '█' : heightRatio > 0.5 ? '▓' : heightRatio > 0.25 ? '▒' : '░';
-
-                grid[gz, gx] = c;
-                colors[gz, gx] = GetConsoleColor(particle.Color);
+                if (gx >= 0 && gx < GridWidth && consoleRow >= 0 && consoleRow < GridHeight)
+                {
+                    grid[consoleRow, gx] = '■';
+                    uint color = (body.UserData is uint c) ? c : 0xFFFFFFFF;
+                    colors[consoleRow, gx] = GetConsoleColor(color);
+                }
             }
 
             // Mark drop position
-            int dropGx = (int)((_dropX - bounds.Min.X + 5) / cellWidth);
-            int dropGz = (int)((_dropZ - bounds.Min.Z + 5) / cellDepth);
+            int dropGx = (int)((_dropX - bounds.Min.X) / cellWidth);
             dropGx = Math.Clamp(dropGx, 0, GridWidth - 1);
-            dropGz = Math.Clamp(dropGz, 0, GridHeight - 1);
+
+            // Draw drop line marker at top
+            if (!_waitingForSettle)
+            {
+                grid[0, dropGx] = '▼';
+                colors[0, dropGx] = ConsoleColor.White;
+            }
 
             // Render grid
-            for (int z = 0; z < GridHeight; z++)
+            for (int r = 0; r < GridHeight; r++)
             {
                 Console.ForegroundColor = ConsoleColor.White;
                 Console.Write("║  ");
 
-                for (int x = 0; x < GridWidth; x++)
+                for (int c = 0; c < GridWidth; c++)
                 {
-                    if (x == dropGx && z == dropGz && !_waitingForSettle)
-                    {
-                        Console.ForegroundColor = ConsoleColor.White;
-                        Console.Write("◎ ");
-                    }
-                    else
-                    {
-                        Console.ForegroundColor = colors[z, x];
-                        Console.Write($"{grid[z, x]} ");
-                    }
+                    Console.ForegroundColor = colors[r, c];
+                    Console.Write($"{grid[r, c]} ");
                 }
 
                 Console.ForegroundColor = ConsoleColor.White;
@@ -366,7 +355,7 @@ namespace Artemis.Demo
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.WriteLine($"\n    Final Score: {_game.Score}");
             Console.WriteLine($"    Turns Played: {_game.Turn}");
-            Console.WriteLine($"    Particles: {_game.Simulation.ParticleCount}");
+            Console.WriteLine($"    Blocks: {_game.ActiveParticleCount}");
 
             Console.ForegroundColor = ConsoleColor.White;
             Console.WriteLine("\n    Press R to restart or Q to quit...");
