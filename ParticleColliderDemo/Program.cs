@@ -53,8 +53,8 @@ class Program
         var renderer = new LHCRenderer(WIDTH, HEIGHT);
         renderer.SetCamera(Vector2D.Zero, zoom: 0.8);
 
-        // Add magnetic field to world
-        world.AddAreaEffector(accelerator.GetMagneticField());
+        // Add magnetic field to world - Handled in Accelerator.Update via Lorentz force
+        // world.AddAreaEffector(accelerator.GetMagneticField());
 
         // Add detectors to world
         foreach (var detector in experiment.Detectors)

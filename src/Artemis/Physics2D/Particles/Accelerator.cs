@@ -23,7 +23,9 @@ namespace Artemis.Physics2D.Particles
         public ParticleBeam Beam2 { get; } = new() { Name = "Beam 2", IsClockwise = false };
 
         // Magnetic confinement
-        private RadialForceEffector2D _magneticField;
+        // private RadialForceEffector2D _magneticField; // Removed: Using Lorentz force instead
+        public double MagneticFieldStrength { get; set; } // B-field in Tesla (simplified units)
+
         private VortexEffector2D _clockwiseVortex;
         private VortexEffector2D _counterClockwiseVortex;
 
@@ -39,13 +41,10 @@ namespace Artemis.Physics2D.Particles
             Radius = radius;
             BeamEnergy = beamEnergy;
 
-            // Create magnetic field to keep particles in orbit (centripetal)
-            _magneticField = new RadialForceEffector2D(
-                center: center,
-                radius: radius + 5,
-                strength: -50.0, // Attractive force toward center
-                falloff: RadialFalloff2D.Linear
-            );
+            // Magnetic field initialized to match beam energy for circular orbit
+            // F = mv^2/r = qvB => B = mv/qr
+            // We set it dynamically in Update
+            MagneticFieldStrength = 10.0;
 
             // Vortex for beam 1 (clockwise)
             _clockwiseVortex = new VortexEffector2D(
@@ -78,7 +77,7 @@ namespace Artemis.Physics2D.Particles
             }
         }
 
-        public RadialForceEffector2D GetMagneticField() => _magneticField;
+        // public RadialForceEffector2D GetMagneticField() => _magneticField;
         public VortexEffector2D GetClockwiseVortex() => _clockwiseVortex;
         public VortexEffector2D GetCounterClockwiseVortex() => _counterClockwiseVortex;
 
@@ -87,7 +86,7 @@ namespace Artemis.Physics2D.Particles
         /// </summary>
         public void RegisterEffectors(PhysicsWorld2D world)
         {
-            world.AddAreaEffector(_magneticField);
+            // world.AddAreaEffector(_magneticField); // Removed
             // Note: Vortex effectors are applied selectively based on beam direction
         }
 
@@ -271,7 +270,40 @@ namespace Artemis.Physics2D.Particles
         /// </summary>
         public void SetMagneticFieldStrength(double strength)
         {
-            _magneticField.Strength = strength;
+            MagneticFieldStrength = strength;
+        }
+
+        /// <summary>
+        /// Apply magnetic field (Lorentz force) to all particles.
+        /// F = q(v x B).
+        /// </summary>
+        public void ApplyMagneticFieldParallel(double deltaTime)
+        {
+            var allParticles = GetAllParticles().ToArray();
+
+            Parallel.ForEach(allParticles, particle =>
+            {
+                // Only charged particles are affected
+                if (Math.Abs(particle.Properties.Charge) < 0.001) return;
+
+                var v = particle.Body.Velocity;
+                // v x B in 2D (B is Z-axis)
+                // Result is perpendicular to v.
+                // If B > 0 (out of page), v=(1,0) -> F=(0, -1) (Right hand rule: v x B).
+                // Wait, x cross z = -y.
+                // Let's check: (vx, vy, 0) x (0, 0, B) = (vy*B - 0, 0 - vx*B, 0) = (vy*B, -vx*B, 0).
+
+                double q = particle.Properties.Charge;
+                double B = MagneticFieldStrength;
+
+                // F = q * (v x B)
+                // Fx = q * vy * B
+                // Fy = q * -vx * B
+
+                Vector2D force = new Vector2D(v.Y * B * q, -v.X * B * q);
+
+                particle.Body.ApplyForce(force);
+            });
         }
     }
 

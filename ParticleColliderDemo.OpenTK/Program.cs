@@ -145,8 +145,8 @@ public class ParticleColliderWindow : GraphicsWindow
         // Create experiment
         _experiment = new CollisionExperiment("ARTEMIS Particle Physics Experiment", _accelerator);
 
-        // Add magnetic field
-        World.AddAreaEffector(_accelerator.GetMagneticField());
+        // Add magnetic field - Handled manually
+        // World.AddAreaEffector(_accelerator.GetMagneticField());
 
         // Add detector trigger zones
         foreach (var detector in _experiment.Detectors)
@@ -789,16 +789,24 @@ public class ParticleColliderWindow : GraphicsWindow
         int uiHeight = (int)(Size.Y * 0.25f);
         GL.Viewport(0, 0, Size.X, uiHeight);
 
-        // Orthographic projection for UI (0,0 bottom left to width,height top right)
-        Matrix4 uiProjection = Matrix4.CreateOrthographicOffCenter(0, Size.X, 0, uiHeight, -1f, 1f);
+        // Orthographic projection for UI matching Window Coordinates for Y
+        // Viewport is at bottom (0..uiHeight).
+        // We want Y=Size.Y (bottom) -> -1 (GL bottom)
+        // We want Y=Size.Y - uiHeight (top of panel) -> +1 (GL top)
+        // Matrix4.CreateOrthographicOffCenter(left, right, bottom, top, zNear, zFar)
+        // Map [0, Width] x [Size.Y, Size.Y - uiHeight] to [-1, 1]
+        // Note: bottom > top in Y arguments flips the axis, which matches standard window coords (Y down)
+        Matrix4 uiProjection = Matrix4.CreateOrthographicOffCenter(0, Size.X, Size.Y, Size.Y - uiHeight, -1f, 1f);
 
         // Use a clean shader for UI
         int projectionLoc = GL.GetUniformLocation(ShaderProgram, "projection");
         GL.UniformMatrix4(projectionLoc, false, ref uiProjection);
 
         // Draw background for UI panel (Standard CERN Grey/Black)
-        DrawBox(new Vector2D(Size.X/2, uiHeight/2), Size.X, uiHeight, 0, new Color4(0.85f, 0.85f, 0.85f, 1f), true); // Grey bg
-        DrawBox(new Vector2D(Size.X/2, uiHeight/2), Size.X - 4, uiHeight - 4, 0, new Color4(0f, 0f, 0f, 1f), true);   // Black inner
+        // Coordinates must be in [Size.Y - uiHeight, Size.Y] range now
+        float midY = Size.Y - uiHeight / 2.0f;
+        DrawBox(new Vector2D(Size.X/2, midY), Size.X, uiHeight, 0, new Color4(0.85f, 0.85f, 0.85f, 1f), true); // Grey bg
+        DrawBox(new Vector2D(Size.X/2, midY), Size.X - 4, uiHeight - 4, 0, new Color4(0f, 0f, 0f, 1f), true);   // Black inner
 
         DrawCERNInterface(uiHeight);
 
@@ -822,11 +830,10 @@ public class ParticleColliderWindow : GraphicsWindow
         float startX = margin;
         float startY = margin;
 
-        // Coordinates: Y is 0 at bottom in GL, increasing upwards.
-        // ScreenText Y: 0 is Top.
-        // We need to coordinate these.
-        // Screen Text Y for bottom panel:
-        float uiTopY = Size.Y - height + margin;
+        // Coordinates: Window Coordinates (0 at Top)
+        // Panel starts at Size.Y - height
+        float panelTop = Size.Y - height;
+        float uiTopY = panelTop + margin;
 
         // === HEADER ===
         // "LHC PAGE 1" - Top Left
@@ -845,16 +852,16 @@ public class ParticleColliderWindow : GraphicsWindow
         float statusW = 300;
         float statusH = 30;
         float statusX = width / 2;
-        float statusY = height - 30; // GL coordinates (near top of UI panel)
+        float statusY = panelTop + 45; // Below header
 
         DrawBox(new Vector2D(statusX, statusY), statusW, statusH, 0, statusColor, true);
-        DrawScreenTextCentered(status, width / 2, uiTopY + 15, 14, Color4.Black);
+        DrawScreenTextCentered(status, width / 2, statusY - 7, 14, Color4.Black);
 
         // === GRAPHS ===
         // Left: Beam 1 Intensity, Right: Beam 2 Intensity
         float graphW = w / 2 - 20;
-        float graphH = h * 0.6f;
-        float graphY = height / 2 - 10; // GL coords center
+        float graphH = h * 0.55f;
+        float graphY = panelTop + height * 0.6f; // Center of graphs
 
         float graph1X = width * 0.25f;
         float graph2X = width * 0.75f;
@@ -871,20 +878,25 @@ public class ParticleColliderWindow : GraphicsWindow
         DrawHistoryGraph(new Vector2D(graph2X, graphY), graphW, graphH, _beam2History, new Color4(1f, 0.2f, 0.2f, 1f));
 
         // Labels under graphs
-        // Screen text coordinates
-        float labelY = uiTopY + height * 0.75f;
+        float labelY = graphY + graphH/2 + 5;
         DrawScreenText("I(B1):", graph1X - graphW/2 + 10, labelY, 12, Color4.White);
-        DrawScreenText($"{b1:E2}", graph1X + 10, labelY, 12, new Color4(0.2f, 0.5f, 1f, 1f));
+        DrawScreenText($"{b1:E2}", graph1X + 50, labelY, 12, new Color4(0.2f, 0.5f, 1f, 1f));
 
         DrawScreenText("I(B2):", graph2X - graphW/2 + 10, labelY, 12, Color4.White);
-        DrawScreenText($"{b2:E2}", graph2X + 10, labelY, 12, new Color4(1f, 0.3f, 0.3f, 1f));
+        DrawScreenText($"{b2:E2}", graph2X + 50, labelY, 12, new Color4(1f, 0.3f, 0.3f, 1f));
 
         // === COMMENTS ===
-        DrawScreenText("Comments (02-Jan-2025 14:22:15):", startX, Size.Y - 30, 10, Color4.Gray);
-        DrawScreenText("Collisions in IP1, IP2, IP5, IP8. Lumis optimization.", startX, Size.Y - 15, 12, new Color4(0.5f, 1f, 0.5f, 1f));
+        DrawScreenText("Comments (02-Jan-2025 14:22:15):", startX, Size.Y - 35, 10, Color4.Gray);
+        DrawScreenText("Collisions in IP1, IP2, IP5, IP8. Lumis optimization.", startX, Size.Y - 20, 12, new Color4(0.5f, 1f, 0.5f, 1f));
 
-        // Event display overlay (small, center bottom)
-        DrawATLASEventDisplay(width/2, graphY, height * 0.5f);
+        // Event display overlay (small, center)
+        // DrawATLASEventDisplay(width/2, graphY, height * 0.5f); // Overlapping graphs, maybe remove or scale down
+        // Let's put it very small in the center status box or just omit if it clutters.
+        // Or put it between graphs if space permits.
+        // Space between graphs: Center +/- margin.
+        // Let's put it at the very bottom center.
+        float eventDisplayY = panelTop + height - height*0.15f;
+        DrawATLASEventDisplay(width/2, eventDisplayY, height * 0.25f);
     }
 
     private void DrawHistoryGraph(Vector2D center, float w, float h, List<float> history, Color4 color)
