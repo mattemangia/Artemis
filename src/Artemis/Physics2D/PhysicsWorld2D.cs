@@ -58,6 +58,9 @@ namespace Artemis.Physics2D
         {
             get
             {
+                if (_bodiesLock.IsReadLockHeld || _bodiesLock.IsWriteLockHeld)
+                    return _bodies.ToArray();
+
                 _bodiesLock.EnterReadLock();
                 try { return _bodies.ToArray(); }
                 finally { _bodiesLock.ExitReadLock(); }
