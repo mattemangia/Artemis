@@ -48,7 +48,8 @@ public class Accelerator
     {
         for (int i = 0; i < count; i++)
         {
-            double angle = (double)i / count * Math.PI * 2;
+            // Offset Beam 2 by PI (180 degrees) so they start on the opposite side
+            double angle = ((double)i / count * Math.PI * 2) + Math.PI;
             Vector2D position = Center + Vector2D.FromAngle(angle, Radius);
 
             // Velocity tangent to circle (counter-clockwise)
