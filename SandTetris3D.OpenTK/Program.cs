@@ -166,32 +166,32 @@ public class SandTetrisWindow : GameWindow
     {
         float[] vertices = {
             // Positions          // Normals
-            // Front face
+            // Front face (CCW)
             -0.5f, -0.5f,  0.5f,  0f, 0f, 1f,
              0.5f, -0.5f,  0.5f,  0f, 0f, 1f,
              0.5f,  0.5f,  0.5f,  0f, 0f, 1f,
             -0.5f,  0.5f,  0.5f,  0f, 0f, 1f,
-            // Back face
+            // Back face (Corrected to CCW)
             -0.5f, -0.5f, -0.5f,  0f, 0f, -1f,
-             0.5f, -0.5f, -0.5f,  0f, 0f, -1f,
-             0.5f,  0.5f, -0.5f,  0f, 0f, -1f,
             -0.5f,  0.5f, -0.5f,  0f, 0f, -1f,
-            // Left face
+             0.5f,  0.5f, -0.5f,  0f, 0f, -1f,
+             0.5f, -0.5f, -0.5f,  0f, 0f, -1f,
+            // Left face (CCW)
             -0.5f,  0.5f,  0.5f, -1f, 0f, 0f,
             -0.5f,  0.5f, -0.5f, -1f, 0f, 0f,
             -0.5f, -0.5f, -0.5f, -1f, 0f, 0f,
             -0.5f, -0.5f,  0.5f, -1f, 0f, 0f,
-            // Right face
+            // Right face (Corrected to CCW)
              0.5f,  0.5f,  0.5f,  1f, 0f, 0f,
-             0.5f,  0.5f, -0.5f,  1f, 0f, 0f,
-             0.5f, -0.5f, -0.5f,  1f, 0f, 0f,
              0.5f, -0.5f,  0.5f,  1f, 0f, 0f,
-             // Top face
+             0.5f, -0.5f, -0.5f,  1f, 0f, 0f,
+             0.5f,  0.5f, -0.5f,  1f, 0f, 0f,
+             // Top face (Corrected to CCW)
             -0.5f,  0.5f, -0.5f,  0f, 1f, 0f,
-             0.5f,  0.5f, -0.5f,  0f, 1f, 0f,
-             0.5f,  0.5f,  0.5f,  0f, 1f, 0f,
             -0.5f,  0.5f,  0.5f,  0f, 1f, 0f,
-             // Bottom face
+             0.5f,  0.5f,  0.5f,  0f, 1f, 0f,
+             0.5f,  0.5f, -0.5f,  0f, 1f, 0f,
+             // Bottom face (CCW)
             -0.5f, -0.5f, -0.5f,  0f, -1f, 0f,
              0.5f, -0.5f, -0.5f,  0f, -1f, 0f,
              0.5f, -0.5f,  0.5f,  0f, -1f, 0f,

@@ -161,6 +161,9 @@ namespace Artemis.Demo
             double startX = -TerrariumWidth / 2 + BlockSize / 2;
             double startY = BlockSize / 2;
 
+        // Use Perlin-like coherent noise for colors to create clusters
+        int colorSeed = _random.Next(1000);
+
             for (int r = 0; r < rows; r++)
             {
                 for (int c = 0; c < cols; c++)
@@ -171,10 +174,20 @@ namespace Artemis.Demo
 
                     if (r * BlockSize < waveHeight)
                     {
-                        // Add some jitter
-                        if (_random.NextDouble() > 0.2)
+                    // Ensure the bottom few rows are solid to prevent immediate "hole" victory
+                    // and give the player a foundation to clear.
+                    bool isSolidLayer = r < 3;
+
+                    // Add some jitter for upper layers
+                    if (isSolidLayer || _random.NextDouble() > 0.2)
                         {
-                            uint color = _colors[_random.Next(_colors.Length)];
+                        // Use coherent coloring: simple pattern based on position
+                        // Modifying the pattern to create larger blobs/layers
+                        int colorIndex = (int)((Math.Sin(c * 0.3 + colorSeed) + Math.Cos(r * 0.3)) * 2 + 3) % _colors.Length;
+                        if (colorIndex < 0) colorIndex += _colors.Length;
+
+                        uint color = _colors[colorIndex];
+
                             var body = CreateBlock(x, startY + r * BlockSize, color);
                             // Settle them initially
                             body.IsSleeping = true;
@@ -440,7 +453,8 @@ namespace Artemis.Demo
             }
 
             // Win if hole at bottom (and enough blocks)
-            if (ActiveParticleCount > 50)
+            // Ensure we have played a few turns to avoid instant win on start glitches
+            if (ActiveParticleCount > 50 && _turn > 5)
             {
                 // Check bottom row for gaps
                 // Simple check: Raycast or interval check across the bottom
