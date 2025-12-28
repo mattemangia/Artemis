@@ -59,7 +59,7 @@ public class ParticleColliderWindow : GraphicsWindow
     /// <summary>
     /// Transform 2D physics coordinates to cavalier 3D projection
     /// </summary>
-    private Vector2D ToCavalier(Vector2D pos, float height = 0)
+    private Vector2 ToCavalier(Vector2D pos, float height = 0)
     {
         // Rotate around view axis
         float cos = MathF.Cos(_viewRotation);
@@ -73,7 +73,7 @@ public class ParticleColliderWindow : GraphicsWindow
         double projX = rx;
         double projY = ry * MathF.Cos(CavalierAngle) + height;
 
-        return new Vector2D(projX, projY);
+        return new Vector2(projX, projY);
     }
 
     /// <summary>
@@ -504,13 +504,13 @@ public class ParticleColliderWindow : GraphicsWindow
         for (int i = -gridLines; i <= gridLines; i++)
         {
             // Horizontal lines
-            var start = ToCavalier(new Vector2D(-gridLines * gridSize, i * gridSize), 0);
-            var end = ToCavalier(new Vector2D(gridLines * gridSize, i * gridSize), 0);
+            var start = ToCavalier(new Vector2(-gridLines * gridSize, i * gridSize), 0);
+            var end = ToCavalier(new Vector2(gridLines * gridSize, i * gridSize), 0);
             DrawLine(start, end, gridColor, 1f);
 
             // Vertical lines
-            start = ToCavalier(new Vector2D(i * gridSize, -gridLines * gridSize), 0);
-            end = ToCavalier(new Vector2D(i * gridSize, gridLines * gridSize), 0);
+            start = ToCavalier(new Vector2(i * gridSize, -gridLines * gridSize), 0);
+            end = ToCavalier(new Vector2(i * gridSize, gridLines * gridSize), 0);
             DrawLine(start, end, gridColor, 1f);
         }
     }
@@ -537,10 +537,10 @@ public class ParticleColliderWindow : GraphicsWindow
                 continue;
 
             // Ring position
-            var p1 = new Vector2D(
+            var p1 = new Vector2(
                 MathF.Cos(angle1) * _accelerator.Radius,
                 MathF.Sin(angle1) * _accelerator.Radius);
-            var p2 = new Vector2D(
+            var p2 = new Vector2(
                 MathF.Cos(angle2) * _accelerator.Radius,
                 MathF.Sin(angle2) * _accelerator.Radius);
 
@@ -576,10 +576,10 @@ public class ParticleColliderWindow : GraphicsWindow
             if (isBack != drawBackHalf)
                 continue;
 
-            var p1 = new Vector2D(
+            var p1 = new Vector2(
                 MathF.Cos(angle1) * _accelerator.Radius,
                 MathF.Sin(angle1) * _accelerator.Radius);
-            var p2 = new Vector2D(
+            var p2 = new Vector2(
                 MathF.Cos(angle2) * _accelerator.Radius,
                 MathF.Sin(angle2) * _accelerator.Radius);
 
@@ -609,7 +609,7 @@ public class ParticleColliderWindow : GraphicsWindow
         for (int i = 0; i < vLines; i++)
         {
             double angle = 2 * Math.PI * i / vLines;
-            var offset = new Vector2D(Math.Cos(angle) * radius, Math.Sin(angle) * radius);
+            var offset = new Vector2(Math.Cos(angle) * radius, Math.Sin(angle) * radius);
             var top = ToCavalier(pos + offset, RingHeight + 2);
             var bot = ToCavalier(pos + offset, RingHeight - 2);
             DrawLine(top, bot, new Color4(color.R * 0.7f, color.G * 0.7f, color.B * 0.7f, color.A * 0.5f), 1f);
@@ -622,13 +622,14 @@ public class ParticleColliderWindow : GraphicsWindow
     private void DrawEllipse3D(Vector2D center, double radius, float height, Color4 color)
     {
         int segments = 24;
+        var centerV = ToVec2(center);
         for (int i = 0; i < segments; i++)
         {
             double angle1 = 2 * Math.PI * i / segments;
             double angle2 = 2 * Math.PI * (i + 1) / segments;
 
-            var p1 = center + new Vector2D(Math.Cos(angle1) * radius, Math.Sin(angle1) * radius);
-            var p2 = center + new Vector2D(Math.Cos(angle2) * radius, Math.Sin(angle2) * radius);
+            var p1 = new Vector2D(centerV.X + Math.Cos(angle1) * radius, centerV.Y + Math.Sin(angle1) * radius);
+            var p2 = new Vector2D(centerV.X + Math.Cos(angle2) * radius, centerV.Y + Math.Sin(angle2) * radius);
 
             DrawLine(ToCavalier(p1, height), ToCavalier(p2, height), color, 1f);
         }
@@ -706,8 +707,8 @@ public class ParticleColliderWindow : GraphicsWindow
         // Panel header
         float headerY = lpY - panelHeight * 0.08f;
         DrawLine(
-            new Vector2D(lpX + panelWidth * 0.05f, headerY),
-            new Vector2D(lpX + panelWidth * 0.95f, headerY),
+            new Vector2(lpX + panelWidth * 0.05f, headerY),
+            new Vector2(lpX + panelWidth * 0.95f, headerY),
             new Color4(0.2f, 0.8f, 1f, 0.8f), 2f);
 
         // BEAM 1 gauge with label
@@ -741,8 +742,8 @@ public class ParticleColliderWindow : GraphicsWindow
         // Header line
         headerY = rpY - panelHeight * 0.08f;
         DrawLine(
-            new Vector2D(rpX + panelWidth * 0.05f, headerY),
-            new Vector2D(rpX + panelWidth * 0.95f, headerY),
+            new Vector2(rpX + panelWidth * 0.05f, headerY),
+            new Vector2(rpX + panelWidth * 0.95f, headerY),
             new Color4(1f, 0.5f, 0.2f, 0.8f), 2f);
 
         // Collision counter display (visual bars)
@@ -846,7 +847,7 @@ public class ParticleColliderWindow : GraphicsWindow
     private void DrawPanelBackground(float x, float y, float width, float height)
     {
         // Dark semi-transparent background
-        var center = new Vector2D(x + width / 2, y - height / 2);
+        var center = new Vector2(x + width / 2, y - height / 2);
         DrawBox(center, width, height, 0, new Color4(0.05f, 0.08f, 0.12f, 0.85f), true);
 
         // Border
@@ -857,20 +858,20 @@ public class ParticleColliderWindow : GraphicsWindow
         Color4 accentColor = new Color4(0.3f, 0.7f, 1f, 0.8f);
 
         // Top-left corner
-        DrawLine(new Vector2D(x, y), new Vector2D(x + cornerSize, y), accentColor, 2f);
-        DrawLine(new Vector2D(x, y), new Vector2D(x, y - cornerSize), accentColor, 2f);
+        DrawLine(new Vector2(x, y), new Vector2(x + cornerSize, y), accentColor, 2f);
+        DrawLine(new Vector2(x, y), new Vector2(x, y - cornerSize), accentColor, 2f);
 
         // Top-right corner
-        DrawLine(new Vector2D(x + width, y), new Vector2D(x + width - cornerSize, y), accentColor, 2f);
-        DrawLine(new Vector2D(x + width, y), new Vector2D(x + width, y - cornerSize), accentColor, 2f);
+        DrawLine(new Vector2(x + width, y), new Vector2(x + width - cornerSize, y), accentColor, 2f);
+        DrawLine(new Vector2(x + width, y), new Vector2(x + width, y - cornerSize), accentColor, 2f);
 
         // Bottom-left corner
-        DrawLine(new Vector2D(x, y - height), new Vector2D(x + cornerSize, y - height), accentColor, 2f);
-        DrawLine(new Vector2D(x, y - height), new Vector2D(x, y - height + cornerSize), accentColor, 2f);
+        DrawLine(new Vector2(x, y - height), new Vector2(x + cornerSize, y - height), accentColor, 2f);
+        DrawLine(new Vector2(x, y - height), new Vector2(x, y - height + cornerSize), accentColor, 2f);
 
         // Bottom-right corner
-        DrawLine(new Vector2D(x + width, y - height), new Vector2D(x + width - cornerSize, y - height), accentColor, 2f);
-        DrawLine(new Vector2D(x + width, y - height), new Vector2D(x + width, y - height + cornerSize), accentColor, 2f);
+        DrawLine(new Vector2(x + width, y - height), new Vector2(x + width - cornerSize, y - height), accentColor, 2f);
+        DrawLine(new Vector2(x + width, y - height), new Vector2(x + width, y - height + cornerSize), accentColor, 2f);
     }
 
     private void DrawGauge(float x, float y, float width, float height, float fillPercent, Color4 fillColor, string label)
@@ -878,14 +879,14 @@ public class ParticleColliderWindow : GraphicsWindow
         fillPercent = Math.Clamp(fillPercent, 0f, 1f);
 
         // Background
-        var bgCenter = new Vector2D(x + width / 2, y - height / 2);
+        var bgCenter = new Vector2(x + width / 2, y - height / 2);
         DrawBox(bgCenter, width, height, 0, new Color4(0.1f, 0.1f, 0.15f, 0.9f), true);
 
         // Fill bar
         if (fillPercent > 0.01f)
         {
             float fillWidth = width * fillPercent * 0.95f;
-            var fillCenter = new Vector2D(x + fillWidth / 2 + width * 0.025f, y - height / 2);
+            var fillCenter = new Vector2(x + fillWidth / 2 + width * 0.025f, y - height / 2);
             DrawBox(fillCenter, fillWidth, height * 0.7f, 0, fillColor, true);
 
             // Glow effect on the fill
@@ -896,7 +897,7 @@ public class ParticleColliderWindow : GraphicsWindow
         DrawBox(bgCenter, width, height, 0, new Color4(0.3f, 0.5f, 0.7f, 0.6f), false);
 
         // Label indicator (small box on left)
-        var labelBox = new Vector2D(x - height * 0.8f, y - height / 2);
+        var labelBox = new Vector2(x - height * 0.8f, y - height / 2);
         DrawBox(labelBox, height * 1.2f, height, 0, fillColor, true);
         DrawBox(labelBox, height * 1.2f, height, 0, new Color4(1f, 1f, 1f, 0.4f), false);
     }
@@ -928,12 +929,12 @@ public class ParticleColliderWindow : GraphicsWindow
 
             if (count > 0)
             {
-                var barCenter = new Vector2D(barX, y - height + barHeight / 2);
+                var barCenter = new Vector2(barX, y - height + barHeight / 2);
                 DrawBox(barCenter, barWidth * 0.7f, barHeight, 0, color, true);
             }
 
             // Base indicator
-            DrawCircle(new Vector2D(barX, y - height - barWidth * 0.3f), barWidth * 0.2f, color, true);
+            DrawCircle(new Vector2(barX, y - height - barWidth * 0.3f), barWidth * 0.2f, color, true);
         }
     }
 
@@ -965,7 +966,7 @@ public class ParticleColliderWindow : GraphicsWindow
                     dotColor = new Color4(0.15f, 0.15f, 0.2f, 0.5f);
                 }
 
-                DrawCircle(new Vector2D(dotX, dotY), dotRadius, dotColor, true);
+                DrawCircle(new Vector2(dotX, dotY), dotRadius, dotColor, true);
             }
         }
     }
@@ -1006,16 +1007,16 @@ public class ParticleColliderWindow : GraphicsWindow
         Color4 color = isOn ? onColor : offColor;
 
         // Outer ring
-        DrawCircle(new Vector2D(x, y), size, new Color4(0.2f, 0.25f, 0.3f, 0.8f), true);
+        DrawCircle(new Vector2(x, y), size, new Color4(0.2f, 0.25f, 0.3f, 0.8f), true);
 
         // Inner light
-        DrawCircle(new Vector2D(x, y), size * 0.7f, color, true);
+        DrawCircle(new Vector2(x, y), size * 0.7f, color, true);
 
         // Highlight if on
         if (isOn)
         {
-            DrawCircle(new Vector2D(x, y), size * 1.3f, new Color4(color.R, color.G, color.B, 0.2f), true);
-            DrawCircle(new Vector2D(x - size * 0.2f, y + size * 0.2f), size * 0.2f,
+            DrawCircle(new Vector2(x, y), size * 1.3f, new Color4(color.R, color.G, color.B, 0.2f), true);
+            DrawCircle(new Vector2(x - size * 0.2f, y + size * 0.2f), size * 0.2f,
                 new Color4(1f, 1f, 1f, 0.4f), true);
         }
     }
@@ -1025,7 +1026,7 @@ public class ParticleColliderWindow : GraphicsWindow
     /// </summary>
     private void DrawATLASEventDisplay(float centerX, float centerY, float radius)
     {
-        var center = new Vector2D(centerX, centerY);
+        var center = new Vector2(centerX, centerY);
 
         // Get particle statistics by angle sector
         var particles = World.Bodies
@@ -1078,8 +1079,8 @@ public class ParticleColliderWindow : GraphicsWindow
                 // Draw energy bar from inner to proportional outer radius
                 float barLength = innerRadius + (outerRadius - innerRadius) * energyRatio;
 
-                var innerPt = center + new Vector2D(MathF.Cos(midAngle), MathF.Sin(midAngle)) * innerRadius;
-                var outerPt = center + new Vector2D(MathF.Cos(midAngle), MathF.Sin(midAngle)) * barLength;
+                var innerPt = center + new Vector2(MathF.Cos(midAngle), MathF.Sin(midAngle)) * innerRadius;
+                var outerPt = center + new Vector2(MathF.Cos(midAngle), MathF.Sin(midAngle)) * barLength;
 
                 // Color based on energy (blue->green->yellow->red)
                 Color4 barColor;
@@ -1108,7 +1109,7 @@ public class ParticleColliderWindow : GraphicsWindow
                 double angle = Math.Atan2(relPos.Y, relPos.X);
 
                 // Draw track from center to particle position
-                var trackEnd = center + new Vector2D(MathF.Cos((float)angle), MathF.Sin((float)angle)) *
+                var trackEnd = center + new Vector2(MathF.Cos((float)angle), MathF.Sin((float)angle)) *
                                (float)(innerRadius + (outerRadius - innerRadius) * Math.Min(1, dist / _accelerator.Radius));
 
                 Color4 trackColor = ParticleColors.GetValueOrDefault(particle.Properties.Type, Color4.White);
@@ -1133,14 +1134,14 @@ public class ParticleColliderWindow : GraphicsWindow
         float barHeight = width * 0.08f;
 
         // Background
-        var bgCenter = new Vector2D(centerX, y - barHeight / 2);
+        var bgCenter = new Vector2(centerX, y - barHeight / 2);
         DrawBox(bgCenter, width, barHeight, 0, new Color4(0.08f, 0.1f, 0.15f, 0.8f), true);
 
         // Progress fill
         float fillWidth = width * cyclePercent * 0.95f;
         if (fillWidth > 0.1f)
         {
-            var fillCenter = new Vector2D(centerX - width / 2 + fillWidth / 2 + width * 0.025f, y - barHeight / 2);
+            var fillCenter = new Vector2(centerX - width / 2 + fillWidth / 2 + width * 0.025f, y - barHeight / 2);
             DrawBox(fillCenter, fillWidth, barHeight * 0.6f, 0, new Color4(0.2f, 0.6f, 1f, 0.7f), true);
         }
 
@@ -1150,8 +1151,8 @@ public class ParticleColliderWindow : GraphicsWindow
             float tickX = centerX - width / 2 + (width * i / 10f);
             float tickHeight = (i % 5 == 0) ? barHeight * 0.5f : barHeight * 0.25f;
             DrawLine(
-                new Vector2D(tickX, y),
-                new Vector2D(tickX, y + tickHeight),
+                new Vector2(tickX, y),
+                new Vector2(tickX, y + tickHeight),
                 new Color4(0.4f, 0.6f, 0.8f, 0.6f), 1f);
         }
 
@@ -1165,7 +1166,7 @@ public class ParticleColliderWindow : GraphicsWindow
             float dotX = centerX - width * 0.3f + i * width * 0.15f;
             float dotY = y + barHeight * 0.8f;
             bool lit = i <= cycleNumber;
-            DrawCircle(new Vector2D(dotX, dotY), barHeight * 0.2f,
+            DrawCircle(new Vector2(dotX, dotY), barHeight * 0.2f,
                 lit ? new Color4(0.3f, 0.8f, 1f, 0.9f) : new Color4(0.15f, 0.2f, 0.25f, 0.5f), true);
         }
     }
