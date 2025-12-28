@@ -542,11 +542,11 @@ public class ParticleColliderWindow : GraphicsWindow
 
             // Ring position
             var p1 = new Vector2(
-                MathF.Cos(angle1) * _accelerator.Radius,
-                MathF.Sin(angle1) * _accelerator.Radius);
+                (float)(MathF.Cos(angle1) * _accelerator.Radius),
+                (float)(MathF.Sin(angle1) * _accelerator.Radius));
             var p2 = new Vector2(
-                MathF.Cos(angle2) * _accelerator.Radius,
-                MathF.Sin(angle2) * _accelerator.Radius);
+                (float)(MathF.Cos(angle2) * _accelerator.Radius),
+                (float)(MathF.Sin(angle2) * _accelerator.Radius));
 
             // Project to cavalier view
             var proj1Top = ToCavalier(p1, RingHeight + tubeRadius);
@@ -581,11 +581,11 @@ public class ParticleColliderWindow : GraphicsWindow
                 continue;
 
             var p1 = new Vector2(
-                MathF.Cos(angle1) * _accelerator.Radius,
-                MathF.Sin(angle1) * _accelerator.Radius);
+                (float)(MathF.Cos(angle1) * _accelerator.Radius),
+                (float)(MathF.Sin(angle1) * _accelerator.Radius));
             var p2 = new Vector2(
-                MathF.Cos(angle2) * _accelerator.Radius,
-                MathF.Sin(angle2) * _accelerator.Radius);
+                (float)(MathF.Cos(angle2) * _accelerator.Radius),
+                (float)(MathF.Sin(angle2) * _accelerator.Radius));
 
             var proj1 = ToCavalier(p1, RingHeight);
             var proj2 = ToCavalier(p2, RingHeight);
