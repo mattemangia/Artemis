@@ -32,11 +32,18 @@ A high-performance, multi-threaded physics engine for C# with GPU acceleration, 
   - [Sand Simulation](#sand-simulation)
   - [Fluid Simulation (SPH)](#fluid-simulation-sph)
   - [Particle Collider](#particle-collider-lhc-style)
+- [Modifiers](#modifiers)
 - [Force Systems](#force-systems)
+- [Destruction & Erosion](#destruction--erosion)
+- [Ballistics & Trajectories](#ballistics--trajectories)
+- [Orbital Mechanics & Propulsion](#orbital-mechanics--propulsion)
 - [Collision Detection](#collision-detection)
+- [Simulation Tooling](#simulation-tooling)
+- [Rendering & Ray Tracing](#rendering--ray-tracing)
 - [GPU Acceleration](#gpu-acceleration)
 - [Materials](#materials)
 - [Performance Optimization](#performance-optimization)
+- [Advanced 2D Systems](#advanced-2d-systems)
 - [Advanced Topics](#advanced-topics)
 - [API Reference](#api-reference)
 
@@ -85,6 +92,7 @@ dotnet add package Artemis.Physics
 using Artemis.Simulation;
 using Artemis.Core;
 using Artemis.Bodies;
+using System.Collections.Generic;
 
 // Create a physics world with Earth gravity
 var world = new PhysicsWorld();
@@ -615,6 +623,61 @@ foreach (var p in particles)
 sand.ClearSettled();
 ```
 
+### Sand Sculpture from OBJ + Blow-Away Effects
+
+Use OBJ mesh vertices (from your own loader) to seed sand-like particles, then apply wind and
+explosion forces to erode or scatter the sculpture.
+
+```csharp
+using Artemis.Core;
+using Artemis.Particles;
+using Artemis.Modifiers;
+using Artemis.Forces;
+using System.Collections.Generic;
+
+// Load OBJ vertices with your preferred loader (list of Vector3D points)
+List<Vector3D> vertices = LoadObjVertices("sculpture.obj");
+
+var sand = new ParticleSystem(maxParticles: vertices.Count)
+{
+    DefaultRadius = 0.05,
+    DefaultMass = 0.02,
+    Damping = 0.01
+};
+
+// Seed particles at OBJ vertices
+foreach (var v in vertices)
+{
+    sand.Spawn(position: v, velocity: Vector3D.Zero, color: 0xFFD8C090);
+}
+
+// Modifier-driven wind + turbulence
+var modifiers = new ModifierSystem();
+modifiers.Add(new WindModifier(new Vector3D(1, 0, 0), strength: 12.0)
+{
+    Turbulence = 0.5,
+    GustStrength = 2.0
+});
+modifiers.Add(new TurbulenceModifier { Strength = 6.0 });
+
+// Force-driven blast (applied through particle system forces)
+var blast = new ExplosionForce(
+    center: new Vector3D(0, 2, 0),
+    force: 2000.0,
+    radius: 10.0,
+    id: "blast")
+{
+    Duration = 0.25
+};
+sand.AddForce(blast);
+
+// Update loop
+modifiers.Update(deltaTime);
+modifiers.ApplyTo(sand, deltaTime);
+blast.Update(deltaTime);
+sand.Update(deltaTime);
+```
+
 ### Fluid Simulation (SPH)
 
 Smoothed Particle Hydrodynamics for realistic fluid behavior.
@@ -652,6 +715,38 @@ foreach (var p in fluid.GetParticleList())
 {
     Console.WriteLine($"Pos: {p.Position}, Density: {p.Density}, Pressure: {p.Pressure}");
 }
+```
+
+### Fire & Smoke Simulation
+
+```csharp
+using Artemis.Particles;
+using Artemis.Core;
+
+// Create a fire simulation with linked smoke
+var fire = new FireSimulation(position: new Vector3D(0, 0, 0))
+{
+    EmissionRate = 200,
+    Intensity = 1.0,
+    Wind = new Vector3D(1, 0, 0) * 2.0
+};
+
+// Attach a smoke simulation (optional)
+fire.WithSmoke(new SmokeSimulation());
+
+// Update
+fire.Update(deltaTime);
+```
+
+### Combustion System
+
+```csharp
+using Artemis.Particles;
+
+var combustion = new CombustionSystem();
+combustion.RegisterCombustible(body, ignitionTemperature: 500);
+
+combustion.Update(deltaTime);
 ```
 
 ### Particle Collider (LHC-Style)
@@ -724,6 +819,53 @@ string csv = exporter.ExportToCSV();
 
 ---
 
+## Modifiers
+
+Modifiers are higher-level systems that combine forces, particles, and bodies, allowing you to layer environmental effects on top of simulation.
+
+```csharp
+using Artemis.Modifiers;
+using Artemis.Core;
+
+// Create a modifier system
+var modifiers = new ModifierSystem();
+
+// Add wind with gusts and turbulence
+var wind = new WindModifier(new Vector3D(1, 0, 0), strength: 12.0)
+{
+    GustStrength = 2.2,
+    Turbulence = 0.4
+};
+modifiers.Add(wind);
+
+// Add a bounded low-gravity zone
+var lowG = GravityModifier.LowGravity(new AABB(
+    min: new Vector3D(-10, 0, -10),
+    max: new Vector3D(10, 10, 10)
+));
+modifiers.Add(lowG);
+
+// Add a vortex region
+modifiers.Add(VortexModifier.Tornado(position: new Vector3D(0, 0, 0)));
+
+// Update + apply each frame
+modifiers.Update(deltaTime);
+modifiers.ApplyTo(world.Bodies, deltaTime);
+modifiers.ApplyTo(particles, deltaTime);
+```
+
+### Available Modifiers
+
+- `WindModifier` - gusting wind with turbulence and erosion support
+- `GravityModifier` - regional gravity zones with falloff
+- `AttractorModifier` - point attraction/repulsion
+- `TurbulenceModifier` - noise-driven motion
+- `VortexModifier` - swirling vortex/tornado behavior
+- `DragModifier` - region-based slowdown (water, mud)
+- `ModifierSystem` - apply modifiers to bodies and particles
+
+---
+
 ## Force Systems
 
 ### Gravity Force
@@ -789,10 +931,11 @@ var oil = BuoyancyForce.Oil("oil-tank");
 ### Explosion Force
 
 ```csharp
-var explosion = new ExplosionForce("boom");
-explosion.Center = new Vector3D(0, 0, 0);
-explosion.Force = 5000.0;
-explosion.Radius = 20.0;
+var explosion = new ExplosionForce(
+    center: new Vector3D(0, 0, 0),
+    force: 5000.0,
+    radius: 20.0,
+    id: "boom");
 explosion.UpwardBias = 0.5;     // Ground reflection
 explosion.Duration = 0.5;
 explosion.FalloffPower = 2.0;   // Inverse square
@@ -847,6 +990,207 @@ magnet.IsAttracting = !magnet.IsAttracting;
 
 // Presets
 var industrial = MagneticForce.Industrial("crane");
+```
+
+### Drag & Linear Drag Force
+
+```csharp
+var drag = new DragForce(dragCoefficient: 0.47, crossSectionArea: 0.8);
+drag.FluidDensity = 1.225; // air
+world.AddForce(drag);
+
+var linearDrag = DragForce.Linear(coefficient: 0.05);
+world.AddForce(linearDrag);
+```
+
+### Friction Force
+
+```csharp
+var friction = new FrictionForce(
+    staticCoefficient: 0.8,
+    kineticCoefficient: 0.6,
+    id: "surface-friction")
+{
+    SurfaceNormal = Vector3D.Up
+};
+world.AddForce(friction);
+```
+
+### Spring & Bungee Forces
+
+```csharp
+var spring = new SpringForce(
+    anchor: new Vector3D(0, 10, 0),
+    stiffness: 50.0,
+    restLength: 5.0,
+    damping: 2.0,
+    id: "spring");
+world.AddForce(spring);
+
+var bungee = new BungeeForce(
+    anchor: new Vector3D(0, 10, 0),
+    stiffness: 30.0,
+    restLength: 8.0,
+    id: "bungee");
+world.AddForce(bungee);
+```
+
+### Force Composition & Interaction Rules
+
+```csharp
+var composite = new CompositeForce()
+    .Add(new WindForce("wind"))
+    .Add(new DragForce())
+    .SetDampen<WindForce, DragForce>(factor: 0.7);
+
+world.AddForce(composite);
+```
+
+### G-Force Monitoring
+
+```csharp
+using Artemis.Forces;
+
+var gForces = new GForceSystem();
+gForces.RegisterBody(body);
+gForces.OnHighGForce += (b, g, dir) =>
+{
+    Console.WriteLine($"High G: {g:F1}g");
+};
+
+gForces.Update(deltaTime);
+```
+
+### Planetary Gravity Systems
+
+```csharp
+using Artemis.Forces;
+using System.Numerics;
+
+var solarSystem = new PlanetGravitySystem();
+solarSystem.AddBody(GravitationalBody.Sun());
+solarSystem.AddBody(GravitationalBody.Earth());
+
+// Query field strength
+Vector3 gravity = solarSystem.GetGravityAt(new Vector3(0, 7e6f, 0));
+```
+
+---
+
+## Destruction & Erosion
+
+Fracturing, debris generation, and erosion for destructible objects.
+
+```csharp
+using Artemis.Core;
+using Artemis.Destruction;
+using Artemis.Modifiers;
+
+var fracture = new FractureSystem();
+fracture.MakeFracturable(body, FractureSystem.Glass());
+
+world.OnCollision += (info) =>
+{
+    // Example: fracture on strong impacts
+    fracture.CheckAndFracture(info, impulse: 250.0);
+};
+```
+
+### Erodible Bodies
+
+```csharp
+var erodible = ErodibleBody.CreateBox(
+    center: new Vector3D(0, 5, 0),
+    halfExtents: new Vector3D(2, 2, 2),
+    particleSize: 0.1
+);
+
+// Erode using wind modifier
+var erosionWind = new WindModifier(new Vector3D(1, 0, 0), strength: 8.0);
+erosionWind.ErodibleBodies.Add(erodible);
+```
+
+---
+
+## Ballistics & Trajectories
+
+Ballistic prediction and bullet simulation utilities.
+
+```csharp
+using Artemis.Simulation;
+using System.Numerics;
+
+var ballistics = new BallisticsSystem
+{
+    UseAdvancedDragModel = true,
+    TimeStep = 0.001f
+};
+
+var projectile = Projectile.Bullet556();
+var env = BallisticEnvironment.Standard();
+
+TrajectoryResult result = ballistics.CalculateTrajectory(
+    projectile,
+    origin: new Vector3(0, 1.5f, 0),
+    direction: Vector3.UnitZ,
+    environment: env
+);
+
+Console.WriteLine($"Range: {result.TotalDistance}m");
+```
+
+---
+
+## Orbital Mechanics & Propulsion
+
+### Orbital Mechanics
+
+```csharp
+using Artemis.Forces;
+using Artemis.Core;
+
+var orbits = new OrbitalMechanics { UseNBody = true };
+orbits.AddBody(new CelestialBody
+{
+    Name = "Sun",
+    Mass = 1.989e30,
+    Radius = 6.96e8,
+    IsFixed = true
+});
+orbits.AddBody(new CelestialBody
+{
+    Name = "Earth",
+    Mass = 5.972e24,
+    Radius = 6.371e6,
+    Position = new Vector3D(1.496e11, 0, 0),
+    Velocity = new Vector3D(0, 29_780, 0)
+});
+
+orbits.Update(deltaTime);
+```
+
+### Propulsion System
+
+```csharp
+using Artemis.Forces;
+
+var stage = new PropulsionStage
+{
+    Engines = { Engine.Merlin1D(), Engine.Merlin1D() },
+    Propellants = { Propellant.LiquidOxygen(20000), Propellant.RP1(12000) },
+    DryMass = 25600
+};
+stage.ActivateEngines();
+
+var spacecraft = new Spacecraft
+{
+    Name = "Falcon"
+};
+spacecraft.Stages.Add(stage);
+
+var propulsion = new PropulsionSystem();
+propulsion.AddSpacecraft(spacecraft);
+propulsion.Update(deltaTime);
 ```
 
 ---
@@ -939,6 +1283,105 @@ trigger.OnTriggerExit += (body) => {
 var slowZone = SensorBody.SlowZone(position, size, slowFactor: 0.5);
 var windZone = SensorBody.WindZone(position, size, windForce);
 var antiGravity = SensorBody.AntiGravityZone(position, size, strength: 20.0);
+```
+
+---
+
+## Simulation Tooling
+
+### Simulation Recorder
+
+```csharp
+using Artemis.Simulation;
+
+var recorder = new SimulationRecorder();
+recorder.StartRecording();
+
+// in your loop:
+recorder.RecordFrame(world, deltaTime);
+
+var stats = recorder.GetAllStatistics();
+Console.WriteLine($"Tracked bodies: {stats.Count}");
+```
+
+### Precomputed Simulation & Monte Carlo
+
+```csharp
+var precompute = new PrecomputedSimulation(world)
+{
+    SubSteps = 4
+};
+
+SimulationResult result = precompute.Run(duration: 5.0);
+Console.WriteLine($"Frames: {result.TotalFrames}, FPS: {result.FramesPerSecond:F1}");
+```
+
+### State Transfer (Save/Restore)
+
+```csharp
+using Artemis.Bodies;
+using System.Collections.Generic;
+
+var stateTransfer = new StateTransferSystem();
+var rigidBodies = new List<RigidBody> { bodyA, bodyB };
+var snapshot = stateTransfer.CaptureState(rigidBodies, time: 0.0f, name: "Start");
+
+// Restore later
+stateTransfer.ApplyState(snapshot, rigidBodies);
+```
+
+### Initial/Final States + Reverse Playback
+
+Capture an initial and final state, flip the final state back to a new initial, and replay:
+
+```csharp
+using Artemis.Bodies;
+using Artemis.Simulation;
+using System.Collections.Generic;
+
+var stateTransfer = new StateTransferSystem();
+var rigidBodies = new List<RigidBody> { bodyA, bodyB };
+
+// Capture initial
+PhysicsState initial = stateTransfer.CaptureState(rigidBodies, time: 0.0f, name: "Initial");
+
+// ...run simulation...
+
+// Capture final
+PhysicsState final = stateTransfer.CaptureState(rigidBodies, time: 10.0f, name: "Final");
+
+// Create a reversed state (final becomes new initial with reversed velocities)
+PhysicsState reversed = stateTransfer.FinalToInitial(final, reverseVelocities: true);
+
+// Apply reversed state to restart from the end
+stateTransfer.ApplyState(reversed, rigidBodies);
+```
+
+---
+
+## Rendering & Ray Tracing
+
+Path-traced rendering of Artemis scenes with BVH acceleration and GPU support.
+
+```csharp
+using Artemis.Rendering;
+using Artemis.Compute;
+using System.Numerics;
+
+using var rayTracer = new RayTracingSystem();
+rayTracer.Initialize(GpuBackend.Auto);
+
+int matte = rayTracer.AddMaterial(RayTracingMaterial.Diffuse(new Vector3(0.8f, 0.2f, 0.2f)));
+rayTracer.AddObject(new TraceableSphere { Center = new Vector3(0, 1, 0), Radius = 1, MaterialIndex = matte });
+
+Vector3[] pixels = rayTracer.TraceImage(
+    width: 640,
+    height: 360,
+    cameraPos: new Vector3(0, 2, -5),
+    cameraTarget: Vector3.Zero,
+    cameraUp: Vector3.UnitY
+);
+byte[] image = rayTracer.ToByteArray(pixels);
 ```
 
 ---
@@ -1177,6 +1620,37 @@ var pairs = processor.DetectCollisionsParallel(bodies);
 
 ---
 
+## Advanced 2D Systems
+
+```csharp
+using Artemis.Physics2D;
+
+// Additional joints
+var prismatic = new PrismaticJoint2D(bodyA, bodyB, anchor, axis);
+var mouse = new MouseJoint2D(bodyA, target: new Vector2D(5, 5));
+
+// One-way platforms
+var oneWay = new OneWayPlatformBehavior2D(new Vector2D(0, 1))
+{
+    Threshold = 0.2
+};
+
+// Spatial partitioning
+var grid = new SpatialHashGrid2D(cellSize: 2.0);
+var quadTree = new QuadTree2D(new AABB2D(min, max));
+
+// GPU acceleration
+using var gpu2d = new GpuPhysics2D();
+if (gpu2d.Initialize())
+{
+    gpu2d.PrepareBuffers(world.Bodies);
+    gpu2d.IntegrateVelocitiesGpu(world.Bodies.Count, world.Gravity, 1.0 / 60.0);
+    gpu2d.WriteBackBuffers(world.Bodies);
+}
+```
+
+---
+
 ## Advanced Topics
 
 ### Cloth Simulation
@@ -1273,17 +1747,21 @@ File.WriteAllText("simulation_data.csv", csv);
 | `Artemis.Collision` | Detection and resolution |
 | `Artemis.Simulation` | Physics worlds, solvers |
 | `Artemis.Forces` | Force generators |
+| `Artemis.Modifiers` | Environmental modifiers |
 | `Artemis.Particles` | Particle systems |
 | `Artemis.Physics2D` | 2D physics engine |
 | `Artemis.Physics2D.Particles` | 2D particle physics |
 | `Artemis.Compute` | GPU acceleration |
 | `Artemis.Materials` | Physical materials |
+| `Artemis.Destruction` | Fracture, erosion, debris |
+| `Artemis.Rendering` | Ray tracing utilities |
 
 ### Key Classes
 
 | Class | Purpose |
 |-------|---------|
 | `PhysicsWorld` | 3D physics simulation |
+| `OptimizedPhysicsWorld` | Cache-friendly 3D world |
 | `PhysicsWorld2D` | 2D physics simulation |
 | `RigidBody` / `RigidBody2D` | Physics objects |
 | `Vector3D` / `Vector2D` | Math vectors |
@@ -1291,12 +1769,23 @@ File.WriteAllText("simulation_data.csv", csv);
 | `ParticleSystem` | Basic particles |
 | `SandSimulation` | Granular physics |
 | `FluidSimulation` | SPH fluids |
+| `FireSimulation` / `SmokeSimulation` | Thermal particle effects |
+| `CombustionSystem` | Combustible object simulation |
 | `MassiveParticleSystem` | 1M+ particle simulation |
 | `GpuCompute` | GPU acceleration |
 | `MassiveGpuCompute` | Cross-platform GPU (OpenCL/Metal/CUDA) |
 | `SimdHelpers` | AVX-512/AVX/NEON SIMD utilities |
 | `PhysicsMaterial` | Material properties |
 | `Accelerator2D` | Particle collider |
+| `ModifierSystem` | Environmental modifiers |
+| `FractureSystem` | Destruction and debris |
+| `RayTracingSystem` | Path-traced rendering |
+| `BallisticsSystem` | Trajectory simulation |
+| `OrbitalMechanics` | N-body and Kepler orbits |
+| `PropulsionSystem` | Spacecraft propulsion |
+| `SimulationRecorder` | Frame capture and stats |
+| `PrecomputedSimulation` | Offline/Monte Carlo runs |
+| `StateTransferSystem` | Save/restore simulation state |
 
 ---
 
