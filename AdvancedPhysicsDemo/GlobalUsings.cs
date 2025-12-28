@@ -1,0 +1,14 @@
+global using Artemis.Physics2D;
+global using Vector2 = Artemis.Physics2D.Vector2D;
+global using PhysicsWorld = Artemis.Physics2D.PhysicsWorld2D;
+global using RigidBody = Artemis.Physics2D.RigidBody2D;
+global using Shape = Artemis.Physics2D.Shape2D;
+global using Joint = Artemis.Physics2D.Joint2D;
+global using DistanceJoint = Artemis.Physics2D.DistanceJoint2D;
+global using RevoluteJoint = Artemis.Physics2D.RevoluteJoint2D;
+global using RopeJoint = Artemis.Physics2D.RopeJoint2D;
+global using SpringJoint = Artemis.Physics2D.SpringJoint2D;
+global using Ray = Artemis.Physics2D.Ray2D;
+global using RaycastHit = Artemis.Physics2D.RaycastHit2D;
+global using CollisionLayers = Artemis.Physics2D.CollisionLayers2D;
+global using CollisionEventArgs = Artemis.Physics2D.CollisionEvent2D;

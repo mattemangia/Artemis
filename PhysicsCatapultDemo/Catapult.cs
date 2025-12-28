@@ -1,4 +1,3 @@
-using ArtemisEngine;
 
 namespace PhysicsCatapultDemo;
 

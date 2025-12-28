@@ -19,6 +19,7 @@ public class Detector
 
     public double TotalEnergyDetected => _detector.TotalEnergyDetected;
     public int ParticleCount => _detector.ParticleCount;
+    public int DetectionCount => _detector.Detections.Count;
 
     public Detector(DetectorType2D type, string name, Vector2D position, double radius)
     {

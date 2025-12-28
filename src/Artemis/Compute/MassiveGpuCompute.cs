@@ -201,6 +201,9 @@ namespace Artemis.Compute
 
         private bool TryInitializeOpenCL()
         {
+#if NETSTANDARD2_1
+            return false;
+#else
             try
             {
                 // Try to load OpenCL library
@@ -234,10 +237,14 @@ namespace Artemis.Compute
             {
                 return false;
             }
+#endif
         }
 
         private bool TryInitializeCuda()
         {
+#if NETSTANDARD2_1
+            return false;
+#else
             try
             {
                 // Try to load CUDA runtime
@@ -260,6 +267,7 @@ namespace Artemis.Compute
             {
                 return false;
             }
+#endif
         }
 
         #endregion
@@ -341,7 +349,7 @@ namespace Artemis.Compute
             ExecuteIntegrateKernel(_capacity, deltaTime, gravity, damping);
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
         private void ExecuteIntegrateKernel(int count, float dt, Vector3 gravity, float damping)
         {
             int simdWidth = Vector<float>.Count;
@@ -440,7 +448,7 @@ namespace Artemis.Compute
             ExecuteBoundaryKernel(_capacity, minX, minY, minZ, maxX, maxY, maxZ, restitution);
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
         private void ExecuteBoundaryKernel(int count,
             float minX, float minY, float minZ,
             float maxX, float maxY, float maxZ,

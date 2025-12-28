@@ -1,4 +1,3 @@
-using ArtemisEngine;
 
 namespace PhysicsCatapultDemo;
 
@@ -69,7 +68,7 @@ public class Renderer
         }
     }
 
-    public void DrawCircle(Vector2 center, float radius, char c, ConsoleColor color)
+    public void DrawCircle(Vector2 center, double radius, char c, ConsoleColor color)
     {
         Vector2 screenPos = WorldToScreen(center);
         int screenRadius = (int)(radius * _scale);
@@ -88,7 +87,7 @@ public class Renderer
         }
     }
 
-    public void DrawBox(Vector2 center, float width, float height, char c, ConsoleColor color)
+    public void DrawBox(Vector2 center, double width, double height, char c, ConsoleColor color)
     {
         Vector2 screenPos = WorldToScreen(center);
         int screenWidth = (int)(width * _scale);

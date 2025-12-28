@@ -37,6 +37,19 @@ namespace Artemis.Materials
         public double DynamicFriction { get; set; }
 
         /// <summary>
+        /// Gets or sets the friction coefficient (applies to static and dynamic friction).
+        /// </summary>
+        public double Friction
+        {
+            get => DynamicFriction;
+            set
+            {
+                StaticFriction = value;
+                DynamicFriction = value;
+            }
+        }
+
+        /// <summary>
         /// Gets or sets Young's modulus (elasticity) in Pa.
         /// Higher values = stiffer material.
         /// </summary>

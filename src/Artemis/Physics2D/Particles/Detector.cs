@@ -26,6 +26,7 @@ namespace Artemis.Physics2D.Particles
     /// </summary>
     public class Detector2D
     {
+        private static readonly Random Rng = new();
         public DetectorType2D Type { get; set; }
         public string Name { get; set; }
         public Vector2D Position { get; set; }
@@ -105,7 +106,7 @@ namespace Artemis.Physics2D.Particles
         public void RecordDetection(Particle2D particle, double simulationTime)
         {
             // Check efficiency (stochastic)
-            if (Random.Shared.NextDouble() > Efficiency)
+            if (Rng.NextDouble() > Efficiency)
                 return;
 
             // Avoid double-counting the same particle
@@ -183,8 +184,8 @@ namespace Artemis.Physics2D.Particles
         private static double RandomGaussian()
         {
             // Box-Muller transform
-            double u1 = 1.0 - Random.Shared.NextDouble();
-            double u2 = 1.0 - Random.Shared.NextDouble();
+            double u1 = 1.0 - Rng.NextDouble();
+            double u2 = 1.0 - Rng.NextDouble();
             return Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Sin(2.0 * Math.PI * u2);
         }
 

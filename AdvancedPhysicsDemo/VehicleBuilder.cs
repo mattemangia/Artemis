@@ -1,4 +1,3 @@
-using ArtemisEngine;
 
 namespace AdvancedPhysicsDemo;
 
@@ -32,7 +31,7 @@ public class VehicleBuilder
     public static Vehicle CreateVehicle(PhysicsWorld world, Vector2 position)
     {
         // Create car body
-        var bodyShape = new BoxShape(4.0f, 1.5f);
+        var bodyShape = new BoxShape(2.0f, 0.75f);
         var carBody = new RigidBody(position, 20.0f, bodyShape);
         carBody.Friction = 0.5f;
         carBody.Restitution = 0.2f;

@@ -546,7 +546,7 @@ namespace Artemis.Particles
 
         #region SIMD Integration
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
         private void IntegrateSimd(float dt)
         {
             int count = _count;
@@ -641,7 +641,7 @@ namespace Artemis.Particles
 
         #region Spatial Hash (Counting Sort - GPU-friendly)
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
         private void BuildSpatialHashParallel()
         {
             int count = _count;
@@ -714,7 +714,7 @@ namespace Artemis.Particles
 
         #region Collision Detection & Resolution
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
         private void ResolveCollisionsParallel()
         {
             int count = _count;
@@ -871,7 +871,7 @@ namespace Artemis.Particles
 
         #region Boundary Collisions
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
         private void HandleBoundaryCollisionsSimd()
         {
             float minX = (float)Bounds.Min.X;
@@ -945,7 +945,7 @@ namespace Artemis.Particles
 
         #region Lifetime Management
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
         private void UpdateLifetimesSimd(float dt)
         {
             int count = _count;

@@ -154,6 +154,7 @@ namespace Artemis.Physics2D.Particles
     /// </summary>
     public class Particle2D : ICharged
     {
+        private static readonly Random Rng = new();
         private static int _nextId;
 
         public int Id { get; }
@@ -215,7 +216,7 @@ namespace Artemis.Physics2D.Particles
                 double decayConstant = Math.Log(2) / Properties.HalfLife;
                 double decayProbability = 1.0 - Math.Exp(-decayConstant * deltaTime);
 
-                if (Random.Shared.NextDouble() < decayProbability)
+                if (Rng.NextDouble() < decayProbability)
                 {
                     Decay();
                 }
@@ -266,7 +267,7 @@ namespace Artemis.Physics2D.Particles
         private Particle2D CreateDecayProduct(ParticleType type)
         {
             // Random direction for decay products
-            double angle = Random.Shared.NextDouble() * Math.PI * 2;
+            double angle = Rng.NextDouble() * Math.PI * 2;
             Vector2D direction = Vector2D.FromAngle(angle);
 
             // Conservation of momentum (simplified - lower velocity than parent)

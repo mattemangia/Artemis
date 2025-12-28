@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Artemis.Core;
 
 namespace Artemis.Physics2D
 {
@@ -12,6 +13,8 @@ namespace Artemis.Physics2D
         public Vector2D[] LocalVertices { get; private set; }
         private Vector2D[] _worldVertices;
         private Vector2D[] _normals;
+
+        public override ShapeType2D Type => ShapeType2D.Polygon;
 
         public PolygonShape2D(Vector2D[] vertices)
         {
@@ -45,6 +48,54 @@ namespace Artemis.Physics2D
             return _worldVertices;
         }
 
+        public override AABB2D ComputeAABB(Vector2D position, double rotation)
+        {
+            var vertices = GetWorldVertices(position, rotation);
+            var min = vertices[0];
+            var max = vertices[0];
+
+            for (int i = 1; i < vertices.Length; i++)
+            {
+                min = Vector2D.Min(min, vertices[i]);
+                max = Vector2D.Max(max, vertices[i]);
+            }
+
+            return new AABB2D(min, max);
+        }
+
+        public override MassData2D ComputeMass(double density)
+        {
+            double area = 0;
+            double inertia = 0;
+            var centroid = Vector2D.Zero;
+
+            for (int i = 0; i < LocalVertices.Length; i++)
+            {
+                var v1 = LocalVertices[i];
+                var v2 = LocalVertices[(i + 1) % LocalVertices.Length];
+                double cross = Vector2D.Cross(v1, v2);
+                area += cross;
+                centroid += (v1 + v2) * cross;
+                inertia += cross * (Vector2D.Dot(v1, v1) + Vector2D.Dot(v1, v2) + Vector2D.Dot(v2, v2));
+            }
+
+            area *= 0.5;
+            double mass = density * Math.Abs(area);
+            if (Math.Abs(area) > PhysicsConstants.Epsilon)
+            {
+                centroid /= (6 * area);
+            }
+
+            inertia = density * Math.Abs(inertia) / 12.0;
+
+            return new MassData2D
+            {
+                Mass = mass,
+                Inertia = inertia,
+                Center = centroid
+            };
+        }
+
         public Vector2D[] GetWorldNormals(double rotation)
         {
             double cos = Math.Cos(rotation);
@@ -61,7 +112,7 @@ namespace Artemis.Physics2D
             return rotatedNormals;
         }
 
-        public override double CalculateInertia(double mass)
+        public double CalculateInertia(double mass)
         {
             // Calculate moment of inertia for polygon
             double sum1 = 0;
@@ -80,7 +131,7 @@ namespace Artemis.Physics2D
             return (mass / 6.0) * (sum1 / sum2);
         }
 
-        public override double CalculateArea()
+        public double CalculateArea()
         {
             double area = 0;
             for (int i = 0; i < LocalVertices.Length; i++)
@@ -138,6 +189,8 @@ namespace Artemis.Physics2D
 
         public List<ChildShape> Children { get; private set; }
 
+        public override ShapeType2D Type => ShapeType2D.Polygon;
+
         public CompoundShape2D()
         {
             Children = new List<ChildShape>();
@@ -148,7 +201,7 @@ namespace Artemis.Physics2D
             Children.Add(new ChildShape(shape, localPosition, localRotation));
         }
 
-        public override double CalculateInertia(double mass)
+        public double CalculateInertia(double mass)
         {
             // Distribute mass among children based on their "volume"
             double totalInertia = 0;
@@ -156,7 +209,11 @@ namespace Artemis.Physics2D
 
             foreach (var child in Children)
             {
-                double childInertia = child.Shape.CalculateInertia(massPerChild);
+                var baseMass = child.Shape.ComputeMass(1.0);
+                double density = baseMass.Mass > PhysicsConstants.Epsilon
+                    ? massPerChild / baseMass.Mass
+                    : 0;
+                double childInertia = child.Shape.ComputeMass(density).Inertia;
 
                 // Parallel axis theorem: I = Icm + md^2
                 double distance = child.LocalPosition.Magnitude;
@@ -166,14 +223,65 @@ namespace Artemis.Physics2D
             return totalInertia;
         }
 
-        public override double CalculateArea()
+        public double CalculateArea()
         {
             double totalArea = 0;
             foreach (var child in Children)
             {
-                totalArea += child.Shape.CalculateArea();
+                totalArea += child.Shape.ComputeMass(1.0).Mass;
             }
             return totalArea;
+        }
+
+        public override AABB2D ComputeAABB(Vector2D position, double rotation)
+        {
+            var (min, max) = GetAABB(position, rotation);
+            return new AABB2D(min, max);
+        }
+
+        public override MassData2D ComputeMass(double density)
+        {
+            if (Children.Count == 0)
+            {
+                return new MassData2D
+                {
+                    Mass = 0,
+                    Inertia = 0,
+                    Center = Vector2D.Zero
+                };
+            }
+
+            double totalMass = 0;
+            Vector2D weightedCenter = Vector2D.Zero;
+
+            var childData = new List<(ChildShape child, MassData2D massData)>();
+            foreach (var child in Children)
+            {
+                var massData = child.Shape.ComputeMass(density);
+                var center = child.LocalPosition + massData.Center;
+                totalMass += massData.Mass;
+                weightedCenter += center * massData.Mass;
+                childData.Add((child, massData));
+            }
+
+            Vector2D centerOfMass = totalMass > PhysicsConstants.Epsilon
+                ? weightedCenter / totalMass
+                : Vector2D.Zero;
+
+            double totalInertia = 0;
+            foreach (var (child, massData) in childData)
+            {
+                var center = child.LocalPosition + massData.Center;
+                var distance = (center - centerOfMass).Magnitude;
+                totalInertia += massData.Inertia + massData.Mass * distance * distance;
+            }
+
+            return new MassData2D
+            {
+                Mass = totalMass,
+                Inertia = totalInertia,
+                Center = centerOfMass
+            };
         }
 
         /// <summary>
@@ -238,6 +346,8 @@ namespace Artemis.Physics2D
         public Vector2D Vertex2 { get; set; }
         public Vector2D Normal { get; private set; }
 
+        public override ShapeType2D Type => ShapeType2D.Edge;
+
         public EdgeShape2D(Vector2D v1, Vector2D v2)
         {
             Vertex1 = v1;
@@ -247,16 +357,35 @@ namespace Artemis.Physics2D
             Normal = new Vector2D(-edge.Y, edge.X).Normalized;
         }
 
-        public override double CalculateInertia(double mass)
+        public double CalculateInertia(double mass)
         {
             // Edge is typically static, return 0
             return 0;
         }
 
-        public override double CalculateArea()
+        public double CalculateArea()
         {
             // Edge has no area
             return 0;
+        }
+
+        public override AABB2D ComputeAABB(Vector2D position, double rotation)
+        {
+            var v1 = position + Vector2D.Rotate(Vertex1, rotation);
+            var v2 = position + Vector2D.Rotate(Vertex2, rotation);
+            var min = new Vector2D(Math.Min(v1.X, v2.X), Math.Min(v1.Y, v2.Y));
+            var max = new Vector2D(Math.Max(v1.X, v2.X), Math.Max(v1.Y, v2.Y));
+            return new AABB2D(min, max);
+        }
+
+        public override MassData2D ComputeMass(double density)
+        {
+            return new MassData2D
+            {
+                Mass = 0,
+                Inertia = 0,
+                Center = (Vertex1 + Vertex2) * 0.5
+            };
         }
 
         public Vector2D GetWorldNormal(double rotation)
@@ -284,6 +413,8 @@ namespace Artemis.Physics2D
         public Vector2D[] Vertices { get; private set; }
         public bool IsLoop { get; private set; }
 
+        public override ShapeType2D Type => ShapeType2D.Chain;
+
         public ChainShape2D(Vector2D[] vertices, bool isLoop = false)
         {
             if (vertices.Length < 2)
@@ -301,14 +432,40 @@ namespace Artemis.Physics2D
 
         public int EdgeCount => IsLoop ? Vertices.Length : Vertices.Length - 1;
 
-        public override double CalculateInertia(double mass)
+        public double CalculateInertia(double mass)
         {
             return 0; // Chains are typically static
         }
 
-        public override double CalculateArea()
+        public double CalculateArea()
         {
             return 0; // Chain has no area
+        }
+
+        public override AABB2D ComputeAABB(Vector2D position, double rotation)
+        {
+            var first = position + Vector2D.Rotate(Vertices[0], rotation);
+            var min = first;
+            var max = first;
+
+            for (int i = 1; i < Vertices.Length; i++)
+            {
+                var world = position + Vector2D.Rotate(Vertices[i], rotation);
+                min = Vector2D.Min(min, world);
+                max = Vector2D.Max(max, world);
+            }
+
+            return new AABB2D(min, max);
+        }
+
+        public override MassData2D ComputeMass(double density)
+        {
+            return new MassData2D
+            {
+                Mass = 0,
+                Inertia = 0,
+                Center = Vector2D.Zero
+            };
         }
     }
 }

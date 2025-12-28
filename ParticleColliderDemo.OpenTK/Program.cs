@@ -440,7 +440,7 @@ public class ParticleColliderWindow : GraphicsWindow
         foreach (var particle in allParticles)
         {
             Color4 color = ParticleColors.GetValueOrDefault(particle.Properties.Type, Color4.White);
-            float radius = particle.Body.Shape is CircleShape cs ? cs.Radius : 0.15f;
+            float radius = particle.Body.Shape is CircleShape cs ? (float)cs.Radius : 0.15f;
 
             // Draw shadow on ground
             var shadowPos = ToCavalier(particle.Body.Position, 0);
@@ -472,7 +472,7 @@ public class ParticleColliderWindow : GraphicsWindow
         // Draw collision events in 3D
         foreach (var (evt, timestamp) in _recentCollisions)
         {
-            float age = _experiment.SimulationTime - timestamp;
+            float age = (float)(_experiment.SimulationTime - timestamp);
             if (age > 2.0f) continue;
 
             float alpha = 1f - (age / 2f);
@@ -714,7 +714,7 @@ public class ParticleColliderWindow : GraphicsWindow
         // Energy gauge
         gaugeY -= panelHeight * 0.2f;
         DrawGauge(lpX + panelWidth * 0.1f, gaugeY, gaugeWidth, gaugeHeight,
-            MathF.Min(1f, avgEnergy / 1000f), new Color4(1f, 0.8f, 0.2f, 0.9f), "E");
+            MathF.Min(1f, (float)(avgEnergy / 1000f)), new Color4(1f, 0.8f, 0.2f, 0.9f), "E");
 
         // Particle count bars
         gaugeY -= panelHeight * 0.25f;
@@ -746,7 +746,7 @@ public class ParticleColliderWindow : GraphicsWindow
         // === BOTTOM CENTER - Energy Ring Display ===
         float ringCenterX = (float)CameraPosition.X;
         float ringCenterY = bottom + panelMargin + halfHeight * 0.15f;
-        DrawEnergyRingIndicator(ringCenterX, ringCenterY, halfWidth * 0.25f, avgEnergy);
+        DrawEnergyRingIndicator(ringCenterX, ringCenterY, halfWidth * 0.25f, (float)avgEnergy);
 
         // === TOP CENTER - Time Display ===
         DrawTimeDisplay((float)CameraPosition.X, top - panelMargin * 2, halfWidth * 0.3f);
@@ -974,7 +974,7 @@ public class ParticleColliderWindow : GraphicsWindow
     private void DrawTimeDisplay(float centerX, float y, float width)
     {
         // Time elapsed bar
-        float elapsed = _experiment.SimulationTime;
+        float elapsed = (float)_experiment.SimulationTime;
         float cycleTime = elapsed % 10f; // 10 second cycles
         float cyclePercent = cycleTime / 10f;
 
