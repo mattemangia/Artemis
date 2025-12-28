@@ -56,10 +56,12 @@ A high-performance, multi-threaded physics engine for C# with GPU acceleration, 
 - **GPU Acceleration** - OpenCL, CUDA, Vulkan, DirectCompute, Metal backends
 - **2D & 3D Physics** - Complete engines for both dimensions
 - **Particle Systems** - Sand, fluid (SPH), fire, smoke simulations
-- **Force Systems** - Gravity, wind, buoyancy, magnetism, vortex, explosions
+- **Force Systems** - Uniform gravity, point gravity fields, wind, buoyancy, magnetism, vortex, explosions
 - **Continuous Collision Detection** - Prevents tunneling for fast objects
 - **Spatial Hashing** - O(n) broad-phase collision detection
 - **Cloth Simulation** - Real-time deformable cloth with tearing
+- **Destruction & Shattering** - Fracture, shatter events, debris, and erosion
+- **Orbital Mechanics & Propulsion** - N-body orbits, Keplerian motion, spacecraft engines
 - **Scientific Accuracy** - Energy tracking, RK4 integration, data export
 
 ---
@@ -1079,7 +1081,7 @@ Vector3 gravity = solarSystem.GetGravityAt(new Vector3(0, 7e6f, 0));
 
 ## Destruction & Erosion
 
-Fracturing, debris generation, and erosion for destructible objects.
+Fracturing, shattering, debris generation, and erosion for destructible objects.
 
 ```csharp
 using Artemis.Core;
