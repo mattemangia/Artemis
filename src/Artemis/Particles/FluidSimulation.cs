@@ -1,5 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Numerics;
 using Artemis.Bodies;
 using Artemis.Core;
 using Artemis.Forces;
@@ -7,32 +11,54 @@ using Artemis.Forces;
 namespace Artemis.Particles
 {
     /// <summary>
-    /// Smoothed Particle Hydrodynamics (SPH) fluid simulation.
+    /// High-performance SPH fluid simulation with multi-threading and SIMD.
     /// Simulates realistic fluid behavior with pressure, viscosity, and surface tension.
     /// </summary>
     public class FluidSimulation
     {
         #region Fields
 
-        private readonly List<FluidParticle> _particles;
-        private readonly Dictionary<(int, int, int), List<int>> _grid;
+        // Structure of Arrays for SIMD-friendly memory layout
+        private float[] _posX;
+        private float[] _posY;
+        private float[] _posZ;
+        private float[] _velX;
+        private float[] _velY;
+        private float[] _velZ;
+        private float[] _forceX;
+        private float[] _forceY;
+        private float[] _forceZ;
+        private float[] _density;
+        private float[] _pressure;
+        private byte[] _flags; // bit 0 = active
+
+        private int _capacity;
+        private int _count;
+
+        // Spatial grid
+        private readonly Dictionary<long, List<int>> _grid;
+        private readonly float _cellSize;
+        private readonly float _invCellSize;
+
         private readonly List<IPhysicsBody> _colliders;
         private readonly List<IForce> _externalForces;
-        private readonly double _cellSize;
+
+        // Thread synchronization
+        private readonly object _countLock = new object();
 
         #endregion
 
         #region Properties
 
         /// <summary>
-        /// Gets all particles.
+        /// Gets all particles as a readonly view.
         /// </summary>
-        public IReadOnlyList<FluidParticle> Particles => _particles;
+        public IReadOnlyList<FluidParticle> Particles => GetParticleList();
 
         /// <summary>
         /// Gets the number of particles.
         /// </summary>
-        public int ParticleCount => _particles.Count;
+        public int ParticleCount => _count;
 
         /// <summary>
         /// Gets the colliders list.
@@ -51,19 +77,16 @@ namespace Artemis.Particles
 
         /// <summary>
         /// Gets or sets the rest density of the fluid in kg/m³.
-        /// Water = 1000, Oil = 900, Honey = 1400
         /// </summary>
         public double RestDensity { get; set; } = 1000.0;
 
         /// <summary>
         /// Gets or sets the gas constant for pressure calculation.
-        /// Higher = stiffer fluid.
         /// </summary>
         public double GasConstant { get; set; } = 2000.0;
 
         /// <summary>
         /// Gets or sets the viscosity coefficient.
-        /// Water = 0.001, Oil = 0.1, Honey = 10
         /// </summary>
         public double Viscosity { get; set; } = 0.001;
 
@@ -103,11 +126,91 @@ namespace Artemis.Particles
         {
             Bounds = bounds;
             SmoothingRadius = smoothingRadius;
-            _cellSize = smoothingRadius;
-            _particles = new List<FluidParticle>();
-            _grid = new Dictionary<(int, int, int), List<int>>();
+            _cellSize = (float)smoothingRadius;
+            _invCellSize = 1f / _cellSize;
+
+            _capacity = 1024;
+            _count = 0;
+
+            AllocateArrays(_capacity);
+
+            _grid = new Dictionary<long, List<int>>();
             _colliders = new List<IPhysicsBody>();
             _externalForces = new List<IForce>();
+        }
+
+        private void AllocateArrays(int capacity)
+        {
+            _posX = new float[capacity];
+            _posY = new float[capacity];
+            _posZ = new float[capacity];
+            _velX = new float[capacity];
+            _velY = new float[capacity];
+            _velZ = new float[capacity];
+            _forceX = new float[capacity];
+            _forceY = new float[capacity];
+            _forceZ = new float[capacity];
+            _density = new float[capacity];
+            _pressure = new float[capacity];
+            _flags = new byte[capacity];
+        }
+
+        private void EnsureCapacity(int required)
+        {
+            if (required <= _capacity) return;
+
+            int newCapacity = Math.Max(required, _capacity * 2);
+
+            var newPosX = new float[newCapacity];
+            var newPosY = new float[newCapacity];
+            var newPosZ = new float[newCapacity];
+            var newVelX = new float[newCapacity];
+            var newVelY = new float[newCapacity];
+            var newVelZ = new float[newCapacity];
+            var newForceX = new float[newCapacity];
+            var newForceY = new float[newCapacity];
+            var newForceZ = new float[newCapacity];
+            var newDensity = new float[newCapacity];
+            var newPressure = new float[newCapacity];
+            var newFlags = new byte[newCapacity];
+
+            Array.Copy(_posX, newPosX, _count);
+            Array.Copy(_posY, newPosY, _count);
+            Array.Copy(_posZ, newPosZ, _count);
+            Array.Copy(_velX, newVelX, _count);
+            Array.Copy(_velY, newVelY, _count);
+            Array.Copy(_velZ, newVelZ, _count);
+            Array.Copy(_forceX, newForceX, _count);
+            Array.Copy(_forceY, newForceY, _count);
+            Array.Copy(_forceZ, newForceZ, _count);
+            Array.Copy(_density, newDensity, _count);
+            Array.Copy(_pressure, newPressure, _count);
+            Array.Copy(_flags, newFlags, _count);
+
+            _posX = newPosX; _posY = newPosY; _posZ = newPosZ;
+            _velX = newVelX; _velY = newVelY; _velZ = newVelZ;
+            _forceX = newForceX; _forceY = newForceY; _forceZ = newForceZ;
+            _density = newDensity; _pressure = newPressure;
+            _flags = newFlags;
+            _capacity = newCapacity;
+        }
+
+        private List<FluidParticle> GetParticleList()
+        {
+            var result = new List<FluidParticle>(_count);
+            for (int i = 0; i < _count; i++)
+            {
+                result.Add(new FluidParticle
+                {
+                    Position = new Vector3D(_posX[i], _posY[i], _posZ[i]),
+                    Velocity = new Vector3D(_velX[i], _velY[i], _velZ[i]),
+                    Force = new Vector3D(_forceX[i], _forceY[i], _forceZ[i]),
+                    Density = _density[i],
+                    Pressure = _pressure[i],
+                    IsActive = (_flags[i] & 1) != 0
+                });
+            }
+            return result;
         }
 
         #endregion
@@ -119,19 +222,27 @@ namespace Artemis.Particles
         /// </summary>
         public int AddParticle(Vector3D position, Vector3D velocity = default)
         {
-            var particle = new FluidParticle
+            lock (_countLock)
             {
-                Position = position,
-                Velocity = velocity,
-                Force = Vector3D.Zero,
-                Density = RestDensity,
-                Pressure = 0,
-                IsActive = true
-            };
+                EnsureCapacity(_count + 1);
 
-            int index = _particles.Count;
-            _particles.Add(particle);
-            return index;
+                int index = _count;
+                _posX[index] = (float)position.X;
+                _posY[index] = (float)position.Y;
+                _posZ[index] = (float)position.Z;
+                _velX[index] = (float)velocity.X;
+                _velY[index] = (float)velocity.Y;
+                _velZ[index] = (float)velocity.Z;
+                _forceX[index] = 0;
+                _forceY[index] = 0;
+                _forceZ[index] = 0;
+                _density[index] = (float)RestDensity;
+                _pressure[index] = 0;
+                _flags[index] = 1;
+
+                _count++;
+                return index;
+            }
         }
 
         /// <summary>
@@ -139,22 +250,44 @@ namespace Artemis.Particles
         /// </summary>
         public int AddFluidBlock(Vector3D min, Vector3D max, double spacing)
         {
-            int count = 0;
-            double halfSpacing = spacing * 0.5;
+            var positions = new List<(float x, float y, float z)>();
+            float halfSpacing = (float)spacing * 0.5f;
 
-            for (double x = min.X + halfSpacing; x < max.X; x += spacing)
+            for (float x = (float)min.X + halfSpacing; x < (float)max.X; x += (float)spacing)
             {
-                for (double y = min.Y + halfSpacing; y < max.Y; y += spacing)
+                for (float y = (float)min.Y + halfSpacing; y < (float)max.Y; y += (float)spacing)
                 {
-                    for (double z = min.Z + halfSpacing; z < max.Z; z += spacing)
+                    for (float z = (float)min.Z + halfSpacing; z < (float)max.Z; z += (float)spacing)
                     {
-                        AddParticle(new Vector3D(x, y, z));
-                        count++;
+                        positions.Add((x, y, z));
                     }
                 }
             }
 
-            return count;
+            lock (_countLock)
+            {
+                EnsureCapacity(_count + positions.Count);
+
+                foreach (var (x, y, z) in positions)
+                {
+                    int index = _count;
+                    _posX[index] = x;
+                    _posY[index] = y;
+                    _posZ[index] = z;
+                    _velX[index] = 0;
+                    _velY[index] = 0;
+                    _velZ[index] = 0;
+                    _forceX[index] = 0;
+                    _forceY[index] = 0;
+                    _forceZ[index] = 0;
+                    _density[index] = (float)RestDensity;
+                    _pressure[index] = 0;
+                    _flags[index] = 1;
+                    _count++;
+                }
+            }
+
+            return positions.Count;
         }
 
         /// <summary>
@@ -162,26 +295,46 @@ namespace Artemis.Particles
         /// </summary>
         public int AddFluidSphere(Vector3D center, double radius, double spacing)
         {
-            int count = 0;
-            double radiusSq = radius * radius;
+            var positions = new List<(float x, float y, float z)>();
+            float radiusSq = (float)(radius * radius);
+            float cx = (float)center.X, cy = (float)center.Y, cz = (float)center.Z;
+            float sp = (float)spacing;
 
-            for (double x = center.X - radius; x <= center.X + radius; x += spacing)
+            for (float x = cx - (float)radius; x <= cx + (float)radius; x += sp)
             {
-                for (double y = center.Y - radius; y <= center.Y + radius; y += spacing)
+                for (float y = cy - (float)radius; y <= cy + (float)radius; y += sp)
                 {
-                    for (double z = center.Z - radius; z <= center.Z + radius; z += spacing)
+                    for (float z = cz - (float)radius; z <= cz + (float)radius; z += sp)
                     {
-                        var pos = new Vector3D(x, y, z);
-                        if (Vector3D.DistanceSquared(pos, center) <= radiusSq)
+                        float dx = x - cx, dy = y - cy, dz = z - cz;
+                        if (dx * dx + dy * dy + dz * dz <= radiusSq)
                         {
-                            AddParticle(pos);
-                            count++;
+                            positions.Add((x, y, z));
                         }
                     }
                 }
             }
 
-            return count;
+            lock (_countLock)
+            {
+                EnsureCapacity(_count + positions.Count);
+
+                foreach (var (x, y, z) in positions)
+                {
+                    int index = _count;
+                    _posX[index] = x;
+                    _posY[index] = y;
+                    _posZ[index] = z;
+                    _velX[index] = 0;
+                    _velY[index] = 0;
+                    _velZ[index] = 0;
+                    _flags[index] = 1;
+                    _density[index] = (float)RestDensity;
+                    _count++;
+                }
+            }
+
+            return positions.Count;
         }
 
         /// <summary>
@@ -189,90 +342,42 @@ namespace Artemis.Particles
         /// </summary>
         public void Clear()
         {
-            _particles.Clear();
-            _grid.Clear();
+            lock (_countLock)
+            {
+                _count = 0;
+                _grid.Clear();
+            }
         }
 
         #endregion
 
-        #region Collider Management
+        #region Collider/Force Management
 
-        /// <summary>
-        /// Adds a rigid body as a collider.
-        /// </summary>
-        public void AddCollider(IPhysicsBody body)
-        {
-            if (!_colliders.Contains(body))
-                _colliders.Add(body);
-        }
-
-        /// <summary>
-        /// Removes a collider.
-        /// </summary>
-        public bool RemoveCollider(IPhysicsBody body)
-        {
-            return _colliders.Remove(body);
-        }
-
-        /// <summary>
-        /// Clears all colliders.
-        /// </summary>
-        public void ClearColliders()
-        {
-            _colliders.Clear();
-        }
+        public void AddCollider(IPhysicsBody body) { if (!_colliders.Contains(body)) _colliders.Add(body); }
+        public bool RemoveCollider(IPhysicsBody body) => _colliders.Remove(body);
+        public void ClearColliders() => _colliders.Clear();
+        public void AddForce(IForce force) { if (!_externalForces.Contains(force)) _externalForces.Add(force); }
+        public bool RemoveForce(IForce force) => _externalForces.Remove(force);
 
         #endregion
 
-        #region Force Management
+        #region Simulation (Multi-threaded)
 
         /// <summary>
-        /// Adds an external force affecting the fluid.
-        /// </summary>
-        public void AddForce(IForce force)
-        {
-            if (!_externalForces.Contains(force))
-                _externalForces.Add(force);
-        }
-
-        /// <summary>
-        /// Removes an external force.
-        /// </summary>
-        public bool RemoveForce(IForce force)
-        {
-            return _externalForces.Remove(force);
-        }
-
-        #endregion
-
-        #region Simulation
-
-        /// <summary>
-        /// Updates the fluid simulation.
+        /// Updates the fluid simulation with multi-threading.
         /// </summary>
         public void Update(double deltaTime, int subSteps = 2)
         {
-            double dt = deltaTime / subSteps;
+            float dt = (float)deltaTime / subSteps;
 
             for (int step = 0; step < subSteps; step++)
             {
-                // Build spatial grid
                 RebuildGrid();
-
-                // Compute densities and pressures
-                ComputeDensityPressure();
-
-                // Compute forces
-                ComputeForces();
-
-                // Apply external forces
-                ApplyExternalForces();
-
-                // Integrate
-                Integrate(dt);
-
-                // Handle collisions
-                HandleBoundaryCollisions();
+                ComputeDensityPressureParallel();
+                ComputeForcesParallel();
+                ApplyExternalForcesParallel();
+                IntegrateParallel(dt);
+                HandleBoundaryCollisionsParallel();
                 HandleColliderCollisions();
             }
         }
@@ -281,311 +386,376 @@ namespace Artemis.Particles
         {
             _grid.Clear();
 
-            for (int i = 0; i < _particles.Count; i++)
+            for (int i = 0; i < _count; i++)
             {
-                if (!_particles[i].IsActive)
-                    continue;
+                if ((_flags[i] & 1) == 0) continue;
 
-                var cell = GetCell(_particles[i].Position);
-                if (!_grid.TryGetValue(cell, out var list))
+                long cellKey = GetCellKey(_posX[i], _posY[i], _posZ[i]);
+                if (!_grid.TryGetValue(cellKey, out var list))
                 {
-                    list = new List<int>();
-                    _grid[cell] = list;
+                    list = new List<int>(16);
+                    _grid[cellKey] = list;
                 }
                 list.Add(i);
             }
         }
 
-        private (int, int, int) GetCell(Vector3D position)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private long GetCellKey(float x, float y, float z)
         {
-            return (
-                (int)Math.Floor(position.X / _cellSize),
-                (int)Math.Floor(position.Y / _cellSize),
-                (int)Math.Floor(position.Z / _cellSize)
-            );
+            int cx = (int)MathF.Floor(x * _invCellSize);
+            int cy = (int)MathF.Floor(y * _invCellSize);
+            int cz = (int)MathF.Floor(z * _invCellSize);
+            return ((long)(cx & 0x1FFFFF) << 42) | ((long)(cy & 0x1FFFFF) << 21) | (cz & 0x1FFFFF);
         }
 
-        private void ComputeDensityPressure()
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private long GetCellKeyFromCoords(int cx, int cy, int cz)
         {
-            double h = SmoothingRadius;
-            double h2 = h * h;
-            double poly6Coeff = 315.0 / (64.0 * Math.PI * Math.Pow(h, 9));
+            return ((long)(cx & 0x1FFFFF) << 42) | ((long)(cy & 0x1FFFFF) << 21) | (cz & 0x1FFFFF);
+        }
 
-            for (int i = 0; i < _particles.Count; i++)
+        private void ComputeDensityPressureParallel()
+        {
+            float h = (float)SmoothingRadius;
+            float h2 = h * h;
+            float poly6Coeff = (float)(315.0 / (64.0 * Math.PI * Math.Pow(h, 9)));
+            float restDensity = (float)RestDensity;
+            float gasConstant = (float)GasConstant;
+            float particleMass = (float)ParticleMass;
+
+            Parallel.For(0, _count, i =>
             {
-                if (!_particles[i].IsActive)
-                    continue;
+                if ((_flags[i] & 1) == 0) return;
 
-                var pi = _particles[i];
-                double density = 0;
+                float px = _posX[i], py = _posY[i], pz = _posZ[i];
+                float density = 0;
 
-                // Get neighboring cells
-                var cell = GetCell(pi.Position);
+                int cellX = (int)MathF.Floor(px * _invCellSize);
+                int cellY = (int)MathF.Floor(py * _invCellSize);
+                int cellZ = (int)MathF.Floor(pz * _invCellSize);
+
                 for (int dx = -1; dx <= 1; dx++)
                 {
                     for (int dy = -1; dy <= 1; dy++)
                     {
                         for (int dz = -1; dz <= 1; dz++)
                         {
-                            var neighborCell = (cell.Item1 + dx, cell.Item2 + dy, cell.Item3 + dz);
-                            if (!_grid.TryGetValue(neighborCell, out var neighbors))
-                                continue;
+                            long cellKey = GetCellKeyFromCoords(cellX + dx, cellY + dy, cellZ + dz);
+                            if (!_grid.TryGetValue(cellKey, out var neighbors)) continue;
 
                             foreach (int j in neighbors)
                             {
-                                var pj = _particles[j];
-                                if (!pj.IsActive)
-                                    continue;
+                                if ((_flags[j] & 1) == 0) continue;
 
-                                double r2 = Vector3D.DistanceSquared(pi.Position, pj.Position);
+                                float ddx = px - _posX[j];
+                                float ddy = py - _posY[j];
+                                float ddz = pz - _posZ[j];
+                                float r2 = ddx * ddx + ddy * ddy + ddz * ddz;
+
                                 if (r2 < h2)
                                 {
-                                    // Poly6 kernel
-                                    double diff = h2 - r2;
-                                    density += ParticleMass * poly6Coeff * diff * diff * diff;
+                                    float diff = h2 - r2;
+                                    density += particleMass * poly6Coeff * diff * diff * diff;
                                 }
                             }
                         }
                     }
                 }
 
-                pi.Density = density;
-                // Tait equation for pressure
-                pi.Pressure = GasConstant * (density - RestDensity);
-
-                _particles[i] = pi;
-            }
+                _density[i] = density;
+                _pressure[i] = gasConstant * (density - restDensity);
+            });
         }
 
-        private void ComputeForces()
+        private void ComputeForcesParallel()
         {
-            double h = SmoothingRadius;
-            double h2 = h * h;
-            double spikyCoeff = -45.0 / (Math.PI * Math.Pow(h, 6));
-            double viscosityCoeff = 45.0 / (Math.PI * Math.Pow(h, 6));
+            float h = (float)SmoothingRadius;
+            float h2 = h * h;
+            float spikyCoeff = (float)(-45.0 / (Math.PI * Math.Pow(h, 6)));
+            float viscosityCoeff = (float)(45.0 / (Math.PI * Math.Pow(h, 6)));
+            float particleMass = (float)ParticleMass;
+            float viscosity = (float)Viscosity;
+            float gravX = (float)Gravity.X;
+            float gravY = (float)Gravity.Y;
+            float gravZ = (float)Gravity.Z;
 
-            for (int i = 0; i < _particles.Count; i++)
+            Parallel.For(0, _count, i =>
             {
-                if (!_particles[i].IsActive)
-                    continue;
+                if ((_flags[i] & 1) == 0) return;
 
-                var pi = _particles[i];
-                var pressureForce = Vector3D.Zero;
-                var viscosityForce = Vector3D.Zero;
+                float px = _posX[i], py = _posY[i], pz = _posZ[i];
+                float vx = _velX[i], vy = _velY[i], vz = _velZ[i];
+                float pi_pressure = _pressure[i];
+                float pi_density = _density[i];
 
-                var cell = GetCell(pi.Position);
+                float pfX = 0, pfY = 0, pfZ = 0;
+                float vfX = 0, vfY = 0, vfZ = 0;
+
+                int cellX = (int)MathF.Floor(px * _invCellSize);
+                int cellY = (int)MathF.Floor(py * _invCellSize);
+                int cellZ = (int)MathF.Floor(pz * _invCellSize);
+
                 for (int dx = -1; dx <= 1; dx++)
                 {
                     for (int dy = -1; dy <= 1; dy++)
                     {
                         for (int dz = -1; dz <= 1; dz++)
                         {
-                            var neighborCell = (cell.Item1 + dx, cell.Item2 + dy, cell.Item3 + dz);
-                            if (!_grid.TryGetValue(neighborCell, out var neighbors))
-                                continue;
+                            long cellKey = GetCellKeyFromCoords(cellX + dx, cellY + dy, cellZ + dz);
+                            if (!_grid.TryGetValue(cellKey, out var neighbors)) continue;
 
                             foreach (int j in neighbors)
                             {
-                                if (i == j)
-                                    continue;
+                                if (i == j || (_flags[j] & 1) == 0) continue;
 
-                                var pj = _particles[j];
-                                if (!pj.IsActive)
-                                    continue;
+                                float rijX = px - _posX[j];
+                                float rijY = py - _posY[j];
+                                float rijZ = pz - _posZ[j];
+                                float r2 = rijX * rijX + rijY * rijY + rijZ * rijZ;
 
-                                var rij = pi.Position - pj.Position;
-                                double r = rij.Magnitude;
-
-                                if (r < h && r > PhysicsConstants.Epsilon)
+                                if (r2 < h2 && r2 > 1e-8f)
                                 {
-                                    var rijNorm = rij / r;
+                                    float r = MathF.Sqrt(r2);
+                                    float invR = 1f / r;
+                                    float rijNormX = rijX * invR;
+                                    float rijNormY = rijY * invR;
+                                    float rijNormZ = rijZ * invR;
+
+                                    float pj_density = _density[j];
+                                    float pj_pressure = _pressure[j];
 
                                     // Pressure force (Spiky gradient)
-                                    double pressureGrad = spikyCoeff * (h - r) * (h - r);
-                                    pressureForce -= rijNorm * ParticleMass *
-                                        (pi.Pressure + pj.Pressure) / (2 * pj.Density) * pressureGrad;
+                                    float diff = h - r;
+                                    float pressureGrad = spikyCoeff * diff * diff;
+                                    float pressureTerm = particleMass * (pi_pressure + pj_pressure) / (2 * pj_density) * pressureGrad;
+
+                                    pfX -= rijNormX * pressureTerm;
+                                    pfY -= rijNormY * pressureTerm;
+                                    pfZ -= rijNormZ * pressureTerm;
 
                                     // Viscosity force (Laplacian)
-                                    double viscLaplacian = viscosityCoeff * (h - r);
-                                    viscosityForce += (pj.Velocity - pi.Velocity) * ParticleMass *
-                                        viscLaplacian / pj.Density * Viscosity;
+                                    float viscLaplacian = viscosityCoeff * diff;
+                                    float viscTerm = particleMass * viscLaplacian / pj_density * viscosity;
+
+                                    vfX += (_velX[j] - vx) * viscTerm;
+                                    vfY += (_velY[j] - vy) * viscTerm;
+                                    vfZ += (_velZ[j] - vz) * viscTerm;
                                 }
                             }
                         }
                     }
                 }
 
-                // Gravity
-                var gravityForce = Gravity * pi.Density;
-
-                pi.Force = pressureForce + viscosityForce + gravityForce;
-                _particles[i] = pi;
-            }
+                // Add gravity
+                _forceX[i] = pfX + vfX + gravX * pi_density;
+                _forceY[i] = pfY + vfY + gravY * pi_density;
+                _forceZ[i] = pfZ + vfZ + gravZ * pi_density;
+            });
         }
 
-        private void ApplyExternalForces()
+        private void ApplyExternalForcesParallel()
         {
-            foreach (var force in _externalForces)
+            if (_externalForces.Count == 0) return;
+
+            float particleMass = (float)ParticleMass;
+
+            Parallel.For(0, _count, i =>
             {
-                if (!force.Enabled)
-                    continue;
+                if ((_flags[i] & 1) == 0) return;
 
-                for (int i = 0; i < _particles.Count; i++)
+                foreach (var force in _externalForces)
                 {
-                    if (!_particles[i].IsActive)
-                        continue;
+                    if (!force.Enabled) continue;
 
-                    var pi = _particles[i];
-                    var f = force.Calculate(pi.Position, pi.Velocity, ParticleMass);
-                    pi.Force += f;
-                    _particles[i] = pi;
+                    var pos = new Vector3D(_posX[i], _posY[i], _posZ[i]);
+                    var vel = new Vector3D(_velX[i], _velY[i], _velZ[i]);
+                    var f = force.Calculate(pos, vel, particleMass);
+
+                    _forceX[i] += (float)f.X;
+                    _forceY[i] += (float)f.Y;
+                    _forceZ[i] += (float)f.Z;
                 }
-            }
+            });
         }
 
-        private void Integrate(double dt)
+        private void IntegrateParallel(float dt)
         {
-            for (int i = 0; i < _particles.Count; i++)
+            int simdWidth = System.Numerics.Vector<float>.Count;
+            var dtVec = new System.Numerics.Vector<float>(dt);
+
+            int chunks = (_count + simdWidth - 1) / simdWidth;
+
+            Parallel.For(0, chunks, chunk =>
             {
-                if (!_particles[i].IsActive)
-                    continue;
+                int start = chunk * simdWidth;
+                int end = Math.Min(start + simdWidth, _count);
 
-                var pi = _particles[i];
+                if (end - start == simdWidth && start + simdWidth <= _count)
+                {
+                    // SIMD path
+                    var forceX = new System.Numerics.Vector<float>(_forceX, start);
+                    var forceY = new System.Numerics.Vector<float>(_forceY, start);
+                    var forceZ = new System.Numerics.Vector<float>(_forceZ, start);
+                    var density = new System.Numerics.Vector<float>(_density, start);
+                    var velX = new System.Numerics.Vector<float>(_velX, start);
+                    var velY = new System.Numerics.Vector<float>(_velY, start);
+                    var velZ = new System.Numerics.Vector<float>(_velZ, start);
+                    var posX = new System.Numerics.Vector<float>(_posX, start);
+                    var posY = new System.Numerics.Vector<float>(_posY, start);
+                    var posZ = new System.Numerics.Vector<float>(_posZ, start);
 
-                // Acceleration
-                var acceleration = pi.Force / pi.Density;
+                    // a = F / density
+                    var accX = forceX / density;
+                    var accY = forceY / density;
+                    var accZ = forceZ / density;
 
-                // Semi-implicit Euler
-                pi.Velocity += acceleration * dt;
-                pi.Position += pi.Velocity * dt;
+                    velX += accX * dtVec;
+                    velY += accY * dtVec;
+                    velZ += accZ * dtVec;
 
-                _particles[i] = pi;
-            }
+                    posX += velX * dtVec;
+                    posY += velY * dtVec;
+                    posZ += velZ * dtVec;
+
+                    velX.CopyTo(_velX, start);
+                    velY.CopyTo(_velY, start);
+                    velZ.CopyTo(_velZ, start);
+                    posX.CopyTo(_posX, start);
+                    posY.CopyTo(_posY, start);
+                    posZ.CopyTo(_posZ, start);
+                }
+                else
+                {
+                    // Scalar fallback
+                    for (int i = start; i < end; i++)
+                    {
+                        if ((_flags[i] & 1) == 0) continue;
+
+                        float invDensity = 1f / _density[i];
+                        _velX[i] += _forceX[i] * invDensity * dt;
+                        _velY[i] += _forceY[i] * invDensity * dt;
+                        _velZ[i] += _forceZ[i] * invDensity * dt;
+
+                        _posX[i] += _velX[i] * dt;
+                        _posY[i] += _velY[i] * dt;
+                        _posZ[i] += _velZ[i] * dt;
+                    }
+                }
+            });
         }
 
-        private void HandleBoundaryCollisions()
+        private void HandleBoundaryCollisionsParallel()
         {
-            double damping = 1.0 - BoundaryRestitution;
+            float minX = (float)Bounds.Min.X;
+            float minY = (float)Bounds.Min.Y;
+            float minZ = (float)Bounds.Min.Z;
+            float maxX = (float)Bounds.Max.X;
+            float maxY = (float)Bounds.Max.Y;
+            float maxZ = (float)Bounds.Max.Z;
+            float restitution = (float)BoundaryRestitution;
+            float radius = (float)SmoothingRadius * 0.5f;
 
-            for (int i = 0; i < _particles.Count; i++)
+            Parallel.For(0, _count, i =>
             {
-                if (!_particles[i].IsActive)
-                    continue;
+                if ((_flags[i] & 1) == 0) return;
 
-                var pi = _particles[i];
-                double radius = SmoothingRadius * 0.5;
-
-                if (pi.Position.X - radius < Bounds.Min.X)
+                if (_posX[i] - radius < minX)
                 {
-                    pi.Position.X = Bounds.Min.X + radius;
-                    pi.Velocity.X *= -BoundaryRestitution;
+                    _posX[i] = minX + radius;
+                    _velX[i] *= -restitution;
                 }
-                else if (pi.Position.X + radius > Bounds.Max.X)
+                else if (_posX[i] + radius > maxX)
                 {
-                    pi.Position.X = Bounds.Max.X - radius;
-                    pi.Velocity.X *= -BoundaryRestitution;
+                    _posX[i] = maxX - radius;
+                    _velX[i] *= -restitution;
                 }
 
-                if (pi.Position.Y - radius < Bounds.Min.Y)
+                if (_posY[i] - radius < minY)
                 {
-                    pi.Position.Y = Bounds.Min.Y + radius;
-                    pi.Velocity.Y *= -BoundaryRestitution;
+                    _posY[i] = minY + radius;
+                    _velY[i] *= -restitution;
                 }
-                else if (pi.Position.Y + radius > Bounds.Max.Y)
+                else if (_posY[i] + radius > maxY)
                 {
-                    pi.Position.Y = Bounds.Max.Y - radius;
-                    pi.Velocity.Y *= -BoundaryRestitution;
-                }
-
-                if (pi.Position.Z - radius < Bounds.Min.Z)
-                {
-                    pi.Position.Z = Bounds.Min.Z + radius;
-                    pi.Velocity.Z *= -BoundaryRestitution;
-                }
-                else if (pi.Position.Z + radius > Bounds.Max.Z)
-                {
-                    pi.Position.Z = Bounds.Max.Z - radius;
-                    pi.Velocity.Z *= -BoundaryRestitution;
+                    _posY[i] = maxY - radius;
+                    _velY[i] *= -restitution;
                 }
 
-                _particles[i] = pi;
-            }
+                if (_posZ[i] - radius < minZ)
+                {
+                    _posZ[i] = minZ + radius;
+                    _velZ[i] *= -restitution;
+                }
+                else if (_posZ[i] + radius > maxZ)
+                {
+                    _posZ[i] = maxZ - radius;
+                    _velZ[i] *= -restitution;
+                }
+            });
         }
 
         private void HandleColliderCollisions()
         {
-            double radius = SmoothingRadius * 0.5;
+            float radius = (float)SmoothingRadius * 0.5f;
+            float restitution = (float)CollisionRestitution;
 
             foreach (var collider in _colliders)
             {
-                if (!collider.IsActive)
-                    continue;
+                if (!collider.IsActive) continue;
 
-                // Simple AABB check first
                 var colliderBounds = collider.BoundingBox.Expanded(radius);
 
-                for (int i = 0; i < _particles.Count; i++)
+                Parallel.For(0, _count, i =>
                 {
-                    if (!_particles[i].IsActive)
-                        continue;
+                    if ((_flags[i] & 1) == 0) return;
 
-                    var pi = _particles[i];
+                    var pos = new Vector3D(_posX[i], _posY[i], _posZ[i]);
+                    if (!colliderBounds.Contains(pos)) return;
 
-                    if (!colliderBounds.Contains(pi.Position))
-                        continue;
-
-                    // Detailed collision check
                     if (collider is RigidBody rb)
                     {
-                        HandleRigidBodyCollision(ref pi, rb, radius);
-                        _particles[i] = pi;
+                        HandleRigidBodyCollision(i, rb, radius, restitution);
                     }
-                }
+                });
             }
         }
 
-        private void HandleRigidBodyCollision(ref FluidParticle particle, RigidBody body, double radius)
+        private void HandleRigidBodyCollision(int i, RigidBody body, float radius, float restitution)
         {
-            Vector3D closestPoint;
-            Vector3D normal;
+            var pos = new Vector3D(_posX[i], _posY[i], _posZ[i]);
+            var vel = new Vector3D(_velX[i], _velY[i], _velZ[i]);
 
             switch (body.ShapeType)
             {
                 case CollisionShapeType.Sphere:
-                    var toParticle = particle.Position - body.Position;
+                    var toParticle = pos - body.Position;
                     double dist = toParticle.Magnitude;
                     if (dist < body.Radius + radius)
                     {
-                        normal = dist > PhysicsConstants.Epsilon ? toParticle / dist : Vector3D.Up;
-                        closestPoint = body.Position + normal * body.Radius;
+                        var normal = dist > 1e-8 ? toParticle / dist : Vector3D.Up;
+                        var closestPoint = body.Position + normal * body.Radius;
 
-                        // Push particle out
-                        particle.Position = closestPoint + normal * radius;
-
-                        // Reflect velocity
-                        double velNormal = Vector3D.Dot(particle.Velocity, normal);
+                        pos = closestPoint + normal * radius;
+                        double velNormal = Vector3D.Dot(vel, normal);
                         if (velNormal < 0)
                         {
-                            particle.Velocity -= normal * velNormal * (1 + CollisionRestitution);
-
-                            // Transfer momentum to rigid body if dynamic
-                            if (body.BodyType == BodyType.Dynamic)
-                            {
-                                body.ApplyImpulseAtPoint(
-                                    normal * velNormal * ParticleMass * CollisionRestitution,
-                                    closestPoint
-                                );
-                            }
+                            vel -= normal * velNormal * (1 + restitution);
                         }
+
+                        _posX[i] = (float)pos.X;
+                        _posY[i] = (float)pos.Y;
+                        _posZ[i] = (float)pos.Z;
+                        _velX[i] = (float)vel.X;
+                        _velY[i] = (float)vel.Y;
+                        _velZ[i] = (float)vel.Z;
                     }
                     break;
 
                 case CollisionShapeType.Box:
-                    // Transform to local space
-                    var localPos = body.Transform.InverseTransformPoint(particle.Position);
+                    var localPos = body.Transform.InverseTransformPoint(pos);
                     var halfExtents = body.HalfExtents;
 
-                    // Clamp to box
                     var clamped = new Vector3D(
                         Math.Clamp(localPos.X, -halfExtents.X, halfExtents.X),
                         Math.Clamp(localPos.Y, -halfExtents.Y, halfExtents.Y),
@@ -595,11 +765,11 @@ namespace Artemis.Particles
                     var localDelta = localPos - clamped;
                     double localDist = localDelta.Magnitude;
 
-                    if (localDist < radius || localPos == clamped) // Inside or on surface
+                    if (localDist < radius || localPos == clamped)
                     {
-                        if (localDist < PhysicsConstants.Epsilon)
+                        Vector3D normal;
+                        if (localDist < 1e-8)
                         {
-                            // Find nearest face
                             var dists = new double[]
                             {
                                 halfExtents.X - Math.Abs(localPos.X),
@@ -609,10 +779,7 @@ namespace Artemis.Particles
 
                             int minAxis = 0;
                             for (int a = 1; a < 3; a++)
-                            {
-                                if (dists[a] < dists[minAxis])
-                                    minAxis = a;
-                            }
+                                if (dists[a] < dists[minAxis]) minAxis = a;
 
                             var localNormal = Vector3D.Zero;
                             switch (minAxis)
@@ -623,30 +790,28 @@ namespace Artemis.Particles
                             }
 
                             normal = body.Transform.TransformDirection(localNormal);
-                            particle.Position = body.Transform.TransformPoint(clamped) + normal * radius;
+                            pos = body.Transform.TransformPoint(clamped) + normal * radius;
                         }
                         else
                         {
                             var localNormal = localDelta / localDist;
                             normal = body.Transform.TransformDirection(localNormal);
-                            closestPoint = body.Transform.TransformPoint(clamped);
-                            particle.Position = closestPoint + normal * radius;
+                            var closestPoint = body.Transform.TransformPoint(clamped);
+                            pos = closestPoint + normal * radius;
                         }
 
-                        // Reflect velocity
-                        double velNormal = Vector3D.Dot(particle.Velocity, normal);
+                        double velNormal = Vector3D.Dot(vel, normal);
                         if (velNormal < 0)
                         {
-                            particle.Velocity -= normal * velNormal * (1 + CollisionRestitution);
-
-                            if (body.BodyType == BodyType.Dynamic)
-                            {
-                                body.ApplyImpulseAtPoint(
-                                    normal * velNormal * ParticleMass * CollisionRestitution,
-                                    particle.Position - normal * radius
-                                );
-                            }
+                            vel -= normal * velNormal * (1 + restitution);
                         }
+
+                        _posX[i] = (float)pos.X;
+                        _posY[i] = (float)pos.Y;
+                        _posZ[i] = (float)pos.Z;
+                        _velX[i] = (float)vel.X;
+                        _velY[i] = (float)vel.Y;
+                        _velZ[i] = (float)vel.Z;
                     }
                     break;
             }
@@ -656,90 +821,27 @@ namespace Artemis.Particles
 
         #region Fluent API
 
-        /// <summary>
-        /// Sets the rest density.
-        /// </summary>
-        public FluidSimulation WithDensity(double density)
-        {
-            RestDensity = density;
-            return this;
-        }
-
-        /// <summary>
-        /// Sets the viscosity.
-        /// </summary>
-        public FluidSimulation WithViscosity(double viscosity)
-        {
-            Viscosity = viscosity;
-            return this;
-        }
-
-        /// <summary>
-        /// Sets the surface tension.
-        /// </summary>
-        public FluidSimulation WithSurfaceTension(double tension)
-        {
-            SurfaceTension = tension;
-            return this;
-        }
-
-        /// <summary>
-        /// Sets the gas constant (stiffness).
-        /// </summary>
-        public FluidSimulation WithStiffness(double stiffness)
-        {
-            GasConstant = stiffness;
-            return this;
-        }
-
-        /// <summary>
-        /// Sets the gravity.
-        /// </summary>
-        public FluidSimulation WithGravity(Vector3D gravity)
-        {
-            Gravity = gravity;
-            return this;
-        }
+        public FluidSimulation WithDensity(double density) { RestDensity = density; return this; }
+        public FluidSimulation WithViscosity(double viscosity) { Viscosity = viscosity; return this; }
+        public FluidSimulation WithSurfaceTension(double tension) { SurfaceTension = tension; return this; }
+        public FluidSimulation WithStiffness(double stiffness) { GasConstant = stiffness; return this; }
+        public FluidSimulation WithGravity(Vector3D gravity) { Gravity = gravity; return this; }
 
         #endregion
 
         #region Factory Methods
 
-        /// <summary>
-        /// Creates a water simulation.
-        /// </summary>
         public static FluidSimulation Water(AABB bounds)
-            => new FluidSimulation(bounds)
-                .WithDensity(1000)
-                .WithViscosity(0.001)
-                .WithSurfaceTension(0.0728);
+            => new FluidSimulation(bounds).WithDensity(1000).WithViscosity(0.001).WithSurfaceTension(0.0728);
 
-        /// <summary>
-        /// Creates an oil simulation.
-        /// </summary>
         public static FluidSimulation Oil(AABB bounds)
-            => new FluidSimulation(bounds)
-                .WithDensity(900)
-                .WithViscosity(0.1)
-                .WithSurfaceTension(0.03);
+            => new FluidSimulation(bounds).WithDensity(900).WithViscosity(0.1).WithSurfaceTension(0.03);
 
-        /// <summary>
-        /// Creates a honey simulation.
-        /// </summary>
         public static FluidSimulation Honey(AABB bounds)
-            => new FluidSimulation(bounds)
-                .WithDensity(1400)
-                .WithViscosity(10.0)
-                .WithSurfaceTension(0.05);
+            => new FluidSimulation(bounds).WithDensity(1400).WithViscosity(10.0).WithSurfaceTension(0.05);
 
-        /// <summary>
-        /// Creates a lava simulation.
-        /// </summary>
         public static FluidSimulation Lava(AABB bounds)
-            => new FluidSimulation(bounds)
-                .WithDensity(2500)
-                .WithViscosity(100.0)
-                .WithSurfaceTension(0.4);
+            => new FluidSimulation(bounds).WithDensity(2500).WithViscosity(100.0).WithSurfaceTension(0.4);
 
         #endregion
     }

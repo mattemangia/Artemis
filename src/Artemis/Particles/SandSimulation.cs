@@ -1,40 +1,73 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Numerics;
 using Artemis.Core;
+using Artemis.Compute;
 
 namespace Artemis.Particles
 {
     /// <summary>
-    /// Specialized particle simulation for sand and granular materials.
-    /// Uses a grid-based approach for efficient particle-particle interactions.
+    /// High-performance particle simulation for sand and granular materials.
+    /// Uses multi-threading, SIMD, and optional GPU acceleration.
     /// </summary>
     public class SandSimulation
     {
         #region Fields
 
-        private readonly List<SandParticle> _particles;
-        private readonly Dictionary<(int, int, int), List<int>> _grid;
-        private readonly double _cellSize;
+        // Structure of Arrays for SIMD-friendly memory layout
+        private float[] _posX;
+        private float[] _posY;
+        private float[] _posZ;
+        private float[] _velX;
+        private float[] _velY;
+        private float[] _velZ;
+        private float[] _radii;
+        private uint[] _colors;
+        private byte[] _flags; // bit 0 = active, bit 1 = settled
+        private int[] _groupIds;
+
+        private int _capacity;
+        private int _count;
+        private int _activeCount;
+
+        // Spatial partitioning
+        private readonly Dictionary<long, List<int>> _grid;
+        private readonly float _cellSize;
+        private readonly float _invCellSize;
+
+        // Thread-local storage for collision pairs
+        private readonly ThreadLocal<List<(int, int)>> _threadLocalPairs;
+
+        // GPU compute (optional)
+        private GpuCompute? _gpuCompute;
+        private bool _useGpu;
+
+        // Thread synchronization
+        private readonly object _countLock = new object();
+        private SpinLock[] _particleLocks;
 
         #endregion
 
         #region Properties
 
         /// <summary>
-        /// Gets all particles.
+        /// Gets all particles as a readonly view.
         /// </summary>
-        public IReadOnlyList<SandParticle> Particles => _particles;
+        public IReadOnlyList<SandParticle> Particles => GetParticleList();
 
         /// <summary>
         /// Gets the number of particles.
         /// </summary>
-        public int ParticleCount => _particles.Count;
+        public int ParticleCount => _count;
 
         /// <summary>
         /// Gets the number of active particles.
         /// </summary>
-        public int ActiveParticleCount => _particles.Count(p => p.IsActive);
+        public int ActiveParticleCount => _activeCount;
 
         /// <summary>
         /// Gets or sets the gravity vector.
@@ -47,12 +80,12 @@ namespace Artemis.Particles
         public AABB Bounds { get; set; }
 
         /// <summary>
-        /// Gets or sets the friction coefficient for particle sliding.
+        /// Gets or sets the friction coefficient.
         /// </summary>
         public double Friction { get; set; } = 0.3;
 
         /// <summary>
-        /// Gets or sets the restitution (bounciness) for collisions.
+        /// Gets or sets the restitution (bounciness).
         /// </summary>
         public double Restitution { get; set; } = 0.1;
 
@@ -62,10 +95,25 @@ namespace Artemis.Particles
         public double ParticleRadius { get; set; } = 0.1;
 
         /// <summary>
-        /// Gets or sets the stacking angle in radians.
-        /// Sand piles up at this angle (angle of repose).
+        /// Gets or sets whether to use GPU acceleration.
         /// </summary>
-        public double StackingAngle { get; set; } = Math.PI / 6; // 30 degrees
+        public bool UseGPU
+        {
+            get => _useGpu;
+            set
+            {
+                if (value && _gpuCompute == null)
+                {
+                    InitializeGpu();
+                }
+                _useGpu = value && _gpuCompute != null;
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets the number of threads (0 = auto).
+        /// </summary>
+        public int ThreadCount { get; set; } = 0;
 
         #endregion
 
@@ -74,14 +122,102 @@ namespace Artemis.Particles
         /// <summary>
         /// Creates a new sand simulation.
         /// </summary>
-        /// <param name="bounds">Simulation bounds.</param>
-        /// <param name="cellSize">Grid cell size for spatial hashing.</param>
         public SandSimulation(AABB bounds, double cellSize = 0.5)
         {
             Bounds = bounds;
-            _cellSize = cellSize;
-            _particles = new List<SandParticle>();
-            _grid = new Dictionary<(int, int, int), List<int>>();
+            _cellSize = (float)cellSize;
+            _invCellSize = 1f / _cellSize;
+
+            _capacity = 1024;
+            _count = 0;
+            _activeCount = 0;
+
+            // Allocate SoA arrays
+            AllocateArrays(_capacity);
+
+            _grid = new Dictionary<long, List<int>>();
+            _threadLocalPairs = new ThreadLocal<List<(int, int)>>(() => new List<(int, int)>(256), true);
+            _particleLocks = new SpinLock[_capacity];
+            for (int i = 0; i < _capacity; i++)
+                _particleLocks[i] = new SpinLock(false);
+        }
+
+        private void AllocateArrays(int capacity)
+        {
+            _posX = new float[capacity];
+            _posY = new float[capacity];
+            _posZ = new float[capacity];
+            _velX = new float[capacity];
+            _velY = new float[capacity];
+            _velZ = new float[capacity];
+            _radii = new float[capacity];
+            _colors = new uint[capacity];
+            _flags = new byte[capacity];
+            _groupIds = new int[capacity];
+        }
+
+        private void EnsureCapacity(int required)
+        {
+            if (required <= _capacity) return;
+
+            int newCapacity = Math.Max(required, _capacity * 2);
+
+            var newPosX = new float[newCapacity];
+            var newPosY = new float[newCapacity];
+            var newPosZ = new float[newCapacity];
+            var newVelX = new float[newCapacity];
+            var newVelY = new float[newCapacity];
+            var newVelZ = new float[newCapacity];
+            var newRadii = new float[newCapacity];
+            var newColors = new uint[newCapacity];
+            var newFlags = new byte[newCapacity];
+            var newGroupIds = new int[newCapacity];
+
+            Array.Copy(_posX, newPosX, _count);
+            Array.Copy(_posY, newPosY, _count);
+            Array.Copy(_posZ, newPosZ, _count);
+            Array.Copy(_velX, newVelX, _count);
+            Array.Copy(_velY, newVelY, _count);
+            Array.Copy(_velZ, newVelZ, _count);
+            Array.Copy(_radii, newRadii, _count);
+            Array.Copy(_colors, newColors, _count);
+            Array.Copy(_flags, newFlags, _count);
+            Array.Copy(_groupIds, newGroupIds, _count);
+
+            _posX = newPosX;
+            _posY = newPosY;
+            _posZ = newPosZ;
+            _velX = newVelX;
+            _velY = newVelY;
+            _velZ = newVelZ;
+            _radii = newRadii;
+            _colors = newColors;
+            _flags = newFlags;
+            _groupIds = newGroupIds;
+
+            var newLocks = new SpinLock[newCapacity];
+            for (int i = 0; i < newCapacity; i++)
+                newLocks[i] = new SpinLock(false);
+            _particleLocks = newLocks;
+
+            _capacity = newCapacity;
+        }
+
+        #endregion
+
+        #region GPU Initialization
+
+        private void InitializeGpu()
+        {
+            try
+            {
+                _gpuCompute = new GpuCompute();
+                _gpuCompute.Initialize();
+            }
+            catch
+            {
+                _gpuCompute = null;
+            }
         }
 
         #endregion
@@ -91,62 +227,88 @@ namespace Artemis.Particles
         /// <summary>
         /// Adds a sand particle.
         /// </summary>
-        /// <returns>The index of the added particle.</returns>
         public int AddParticle(Vector3D position, uint color, double? radius = null)
         {
-            var particle = new SandParticle
+            lock (_countLock)
             {
-                Position = position,
-                PreviousPosition = position,
-                Velocity = Vector3D.Zero,
-                Color = color,
-                Radius = radius ?? ParticleRadius,
-                IsActive = true,
-                IsSettled = false,
-                GroupId = -1
-            };
+                EnsureCapacity(_count + 1);
 
-            int index = _particles.Count;
-            _particles.Add(particle);
-            return index;
+                int index = _count;
+                _posX[index] = (float)position.X;
+                _posY[index] = (float)position.Y;
+                _posZ[index] = (float)position.Z;
+                _velX[index] = 0;
+                _velY[index] = 0;
+                _velZ[index] = 0;
+                _radii[index] = (float)(radius ?? ParticleRadius);
+                _colors[index] = color;
+                _flags[index] = 1; // Active, not settled
+                _groupIds[index] = -1;
+
+                _count++;
+                _activeCount++;
+                return index;
+            }
         }
 
         /// <summary>
         /// Adds a spherical cluster of sand particles.
         /// </summary>
-        /// <returns>The starting index and count of added particles.</returns>
         public (int startIndex, int count) AddSandBall(
             Vector3D center,
             double ballRadius,
             uint color,
             double? particleRadius = null)
         {
-            double pRadius = particleRadius ?? ParticleRadius;
-            double spacing = pRadius * 2.1; // Slight gap to prevent initial overlap
+            float pRadius = (float)(particleRadius ?? ParticleRadius);
+            float spacing = pRadius * 2.1f;
 
-            int startIndex = _particles.Count;
-            int count = 0;
-
-            // Fill sphere with particles in a grid pattern
+            int startIndex = _count;
             int steps = (int)Math.Ceiling(ballRadius / spacing);
+            var positions = new List<(float x, float y, float z)>();
 
+            // Pre-calculate positions
             for (int x = -steps; x <= steps; x++)
             {
                 for (int y = -steps; y <= steps; y++)
                 {
                     for (int z = -steps; z <= steps; z++)
                     {
-                        var offset = new Vector3D(x * spacing, y * spacing, z * spacing);
-                        if (offset.Magnitude <= ballRadius - pRadius)
+                        float ox = x * spacing;
+                        float oy = y * spacing;
+                        float oz = z * spacing;
+                        float dist = MathF.Sqrt(ox * ox + oy * oy + oz * oz);
+                        if (dist <= (float)ballRadius - pRadius)
                         {
-                            AddParticle(center + offset, color, pRadius);
-                            count++;
+                            positions.Add(((float)center.X + ox, (float)center.Y + oy, (float)center.Z + oz));
                         }
                     }
                 }
             }
 
-            return (startIndex, count);
+            lock (_countLock)
+            {
+                EnsureCapacity(_count + positions.Count);
+
+                foreach (var (px, py, pz) in positions)
+                {
+                    int index = _count;
+                    _posX[index] = px;
+                    _posY[index] = py;
+                    _posZ[index] = pz;
+                    _velX[index] = 0;
+                    _velY[index] = 0;
+                    _velZ[index] = 0;
+                    _radii[index] = pRadius;
+                    _colors[index] = color;
+                    _flags[index] = 1;
+                    _groupIds[index] = -1;
+                    _count++;
+                    _activeCount++;
+                }
+            }
+
+            return (startIndex, positions.Count);
         }
 
         /// <summary>
@@ -154,11 +316,10 @@ namespace Artemis.Particles
         /// </summary>
         public void RemoveParticle(int index)
         {
-            if (index >= 0 && index < _particles.Count)
+            if (index >= 0 && index < _count && (_flags[index] & 1) != 0)
             {
-                var p = _particles[index];
-                p.IsActive = false;
-                _particles[index] = p;
+                _flags[index] = 0;
+                Interlocked.Decrement(ref _activeCount);
             }
         }
 
@@ -168,16 +329,15 @@ namespace Artemis.Particles
         public int RemoveGroup(int groupId)
         {
             int removed = 0;
-            for (int i = 0; i < _particles.Count; i++)
+            for (int i = 0; i < _count; i++)
             {
-                if (_particles[i].GroupId == groupId && _particles[i].IsActive)
+                if (_groupIds[i] == groupId && (_flags[i] & 1) != 0)
                 {
-                    var p = _particles[i];
-                    p.IsActive = false;
-                    _particles[i] = p;
+                    _flags[i] = 0;
                     removed++;
                 }
             }
+            Interlocked.Add(ref _activeCount, -removed);
             return removed;
         }
 
@@ -186,8 +346,32 @@ namespace Artemis.Particles
         /// </summary>
         public void Clear()
         {
-            _particles.Clear();
-            _grid.Clear();
+            lock (_countLock)
+            {
+                _count = 0;
+                _activeCount = 0;
+                _grid.Clear();
+            }
+        }
+
+        private List<SandParticle> GetParticleList()
+        {
+            var result = new List<SandParticle>(_count);
+            for (int i = 0; i < _count; i++)
+            {
+                result.Add(new SandParticle
+                {
+                    Position = new Vector3D(_posX[i], _posY[i], _posZ[i]),
+                    PreviousPosition = new Vector3D(_posX[i], _posY[i], _posZ[i]),
+                    Velocity = new Vector3D(_velX[i], _velY[i], _velZ[i]),
+                    Radius = _radii[i],
+                    Color = _colors[i],
+                    IsActive = (_flags[i] & 1) != 0,
+                    IsSettled = (_flags[i] & 2) != 0,
+                    GroupId = _groupIds[i]
+                });
+            }
+            return result;
         }
 
         #endregion
@@ -195,246 +379,377 @@ namespace Artemis.Particles
         #region Simulation
 
         /// <summary>
-        /// Updates the simulation.
+        /// Updates the simulation with multi-threading and SIMD.
         /// </summary>
-        /// <param name="deltaTime">Time step in seconds.</param>
-        /// <param name="subSteps">Number of sub-steps for stability.</param>
         public void Update(double deltaTime, int subSteps = 4)
         {
-            double dt = deltaTime / subSteps;
+            float dt = (float)deltaTime / subSteps;
+            float gravX = (float)Gravity.X;
+            float gravY = (float)Gravity.Y;
+            float gravZ = (float)Gravity.Z;
 
             for (int step = 0; step < subSteps; step++)
             {
-                // Rebuild spatial grid
-                RebuildGrid();
+                // 1. Rebuild spatial grid (parallel)
+                RebuildGridParallel();
 
-                // Apply gravity and integrate
-                for (int i = 0; i < _particles.Count; i++)
-                {
-                    if (!_particles[i].IsActive)
-                        continue;
+                // 2. Apply gravity and integrate (SIMD + parallel)
+                IntegrateParallel(dt, gravX, gravY, gravZ);
 
-                    var p = _particles[i];
+                // 3. Handle collisions (parallel)
+                HandleCollisionsParallel();
 
-                    // Skip settled particles (optimization)
-                    if (p.IsSettled)
-                        continue;
+                // 4. Handle bounds (parallel + SIMD)
+                HandleBoundsParallel();
 
-                    // Apply gravity
-                    p.Velocity += Gravity * dt;
-
-                    // Verlet-style integration
-                    p.PreviousPosition = p.Position;
-                    p.Position += p.Velocity * dt;
-
-                    _particles[i] = p;
-                }
-
-                // Handle collisions
-                HandleParticleCollisions();
-                HandleBoundCollisions();
-
-                // Check for settling
-                CheckSettling();
+                // 5. Check settling (parallel)
+                CheckSettlingParallel();
             }
         }
 
-        private void RebuildGrid()
+        #endregion
+
+        #region Parallel Grid Rebuild
+
+        private void RebuildGridParallel()
         {
             _grid.Clear();
 
-            for (int i = 0; i < _particles.Count; i++)
+            // Single-threaded grid rebuild (dictionary not thread-safe for writes)
+            for (int i = 0; i < _count; i++)
             {
-                if (!_particles[i].IsActive)
-                    continue;
+                if ((_flags[i] & 1) == 0) continue;
 
-                var cell = GetCell(_particles[i].Position);
-                if (!_grid.TryGetValue(cell, out var list))
+                long cellKey = GetCellKey(_posX[i], _posY[i], _posZ[i]);
+                if (!_grid.TryGetValue(cellKey, out var list))
                 {
-                    list = new List<int>();
-                    _grid[cell] = list;
+                    list = new List<int>(16);
+                    _grid[cellKey] = list;
                 }
                 list.Add(i);
             }
         }
 
-        private (int, int, int) GetCell(Vector3D position)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private long GetCellKey(float x, float y, float z)
         {
-            return (
-                (int)Math.Floor(position.X / _cellSize),
-                (int)Math.Floor(position.Y / _cellSize),
-                (int)Math.Floor(position.Z / _cellSize)
-            );
+            int cx = (int)MathF.Floor(x * _invCellSize);
+            int cy = (int)MathF.Floor(y * _invCellSize);
+            int cz = (int)MathF.Floor(z * _invCellSize);
+            // Pack into 64 bits: 21 bits each for x, y, z
+            return ((long)(cx & 0x1FFFFF) << 42) | ((long)(cy & 0x1FFFFF) << 21) | (cz & 0x1FFFFF);
         }
 
-        private void HandleParticleCollisions()
+        #endregion
+
+        #region SIMD Integration
+
+        private void IntegrateParallel(float dt, float gravX, float gravY, float gravZ)
         {
-            foreach (var (cell, indices) in _grid)
+            int simdWidth = Vector<float>.Count;
+            var dtVec = new Vector<float>(dt);
+            var gravXVec = new Vector<float>(gravX * dt);
+            var gravYVec = new Vector<float>(gravY * dt);
+            var gravZVec = new Vector<float>(gravZ * dt);
+
+            // Process in SIMD-width chunks
+            int chunks = (_count + simdWidth - 1) / simdWidth;
+
+            Parallel.For(0, chunks, chunk =>
             {
+                int start = chunk * simdWidth;
+                int end = Math.Min(start + simdWidth, _count);
+
+                if (end - start == simdWidth && start + simdWidth <= _count)
+                {
+                    // Full SIMD path
+                    var velX = new Vector<float>(_velX, start);
+                    var velY = new Vector<float>(_velY, start);
+                    var velZ = new Vector<float>(_velZ, start);
+                    var posX = new Vector<float>(_posX, start);
+                    var posY = new Vector<float>(_posY, start);
+                    var posZ = new Vector<float>(_posZ, start);
+                    var flags = new Vector<byte>(_flags, start);
+
+                    // Apply gravity to velocity
+                    velX += gravXVec;
+                    velY += gravYVec;
+                    velZ += gravZVec;
+
+                    // Integrate position
+                    posX += velX * dtVec;
+                    posY += velY * dtVec;
+                    posZ += velZ * dtVec;
+
+                    // Store back
+                    velX.CopyTo(_velX, start);
+                    velY.CopyTo(_velY, start);
+                    velZ.CopyTo(_velZ, start);
+                    posX.CopyTo(_posX, start);
+                    posY.CopyTo(_posY, start);
+                    posZ.CopyTo(_posZ, start);
+                }
+                else
+                {
+                    // Scalar fallback for remainder
+                    for (int i = start; i < end; i++)
+                    {
+                        if ((_flags[i] & 1) == 0 || (_flags[i] & 2) != 0) continue;
+
+                        _velX[i] += gravX * dt;
+                        _velY[i] += gravY * dt;
+                        _velZ[i] += gravZ * dt;
+
+                        _posX[i] += _velX[i] * dt;
+                        _posY[i] += _velY[i] * dt;
+                        _posZ[i] += _velZ[i] * dt;
+                    }
+                }
+            });
+        }
+
+        #endregion
+
+        #region Parallel Collision Detection
+
+        private void HandleCollisionsParallel()
+        {
+            float restitution = (float)Restitution;
+            float friction = (float)Friction;
+
+            // Collect collision pairs from all cells in parallel
+            var cells = _grid.ToArray();
+
+            Parallel.ForEach(cells, cell =>
+            {
+                var indices = cell.Value;
+                var cellKey = cell.Key;
+
+                // Unpack cell coordinates
+                int cx = (int)((cellKey >> 42) & 0x1FFFFF);
+                int cy = (int)((cellKey >> 21) & 0x1FFFFF);
+                int cz = (int)(cellKey & 0x1FFFFF);
+                if (cx >= 0x100000) cx -= 0x200000; // Sign extend
+                if (cy >= 0x100000) cy -= 0x200000;
+                if (cz >= 0x100000) cz -= 0x200000;
+
                 // Check within cell
                 for (int i = 0; i < indices.Count; i++)
                 {
                     for (int j = i + 1; j < indices.Count; j++)
                     {
-                        ResolveCollision(indices[i], indices[j]);
+                        ResolveCollisionSafe(indices[i], indices[j], restitution, friction);
                     }
                 }
 
-                // Check neighboring cells
-                for (int dx = -1; dx <= 1; dx++)
+                // Check neighboring cells (only positive direction to avoid duplicates)
+                for (int dx = 0; dx <= 1; dx++)
                 {
-                    for (int dy = -1; dy <= 1; dy++)
+                    for (int dy = 0; dy <= 1; dy++)
                     {
-                        for (int dz = -1; dz <= 1; dz++)
+                        for (int dz = 0; dz <= 1; dz++)
                         {
-                            if (dx == 0 && dy == 0 && dz == 0)
-                                continue;
+                            if (dx == 0 && dy == 0 && dz == 0) continue;
 
-                            var neighbor = (cell.Item1 + dx, cell.Item2 + dy, cell.Item3 + dz);
-                            if (!_grid.TryGetValue(neighbor, out var neighborIndices))
-                                continue;
+                            long neighborKey = GetCellKeyFromCoords(cx + dx, cy + dy, cz + dz);
+                            if (!_grid.TryGetValue(neighborKey, out var neighborIndices)) continue;
 
                             foreach (var i in indices)
                             {
                                 foreach (var j in neighborIndices)
                                 {
-                                    ResolveCollision(i, j);
+                                    ResolveCollisionSafe(i, j, restitution, friction);
                                 }
                             }
                         }
                     }
                 }
+            });
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private long GetCellKeyFromCoords(int cx, int cy, int cz)
+        {
+            return ((long)(cx & 0x1FFFFF) << 42) | ((long)(cy & 0x1FFFFF) << 21) | (cz & 0x1FFFFF);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ResolveCollisionSafe(int i, int j, float restitution, float friction)
+        {
+            // Ensure consistent lock ordering to prevent deadlocks
+            int first = Math.Min(i, j);
+            int second = Math.Max(i, j);
+
+            bool lockTakenFirst = false;
+            bool lockTakenSecond = false;
+
+            try
+            {
+                _particleLocks[first].Enter(ref lockTakenFirst);
+                _particleLocks[second].Enter(ref lockTakenSecond);
+
+                if ((_flags[i] & 1) == 0 || (_flags[j] & 1) == 0) return;
+
+                float dx = _posX[j] - _posX[i];
+                float dy = _posY[j] - _posY[i];
+                float dz = _posZ[j] - _posZ[i];
+
+                float distSq = dx * dx + dy * dy + dz * dz;
+                float minDist = _radii[i] + _radii[j];
+
+                if (distSq >= minDist * minDist || distSq < 1e-8f) return;
+
+                float dist = MathF.Sqrt(distSq);
+                float invDist = 1f / dist;
+                float nx = dx * invDist;
+                float ny = dy * invDist;
+                float nz = dz * invDist;
+                float penetration = minDist - dist;
+
+                // Position correction
+                float correction = penetration * 0.5f;
+                _posX[i] -= nx * correction;
+                _posY[i] -= ny * correction;
+                _posZ[i] -= nz * correction;
+                _posX[j] += nx * correction;
+                _posY[j] += ny * correction;
+                _posZ[j] += nz * correction;
+
+                // Velocity correction
+                float dvx = _velX[j] - _velX[i];
+                float dvy = _velY[j] - _velY[i];
+                float dvz = _velZ[j] - _velZ[i];
+
+                float velAlongNormal = dvx * nx + dvy * ny + dvz * nz;
+                if (velAlongNormal > 0) return;
+
+                float impulseMag = -(1 + restitution) * velAlongNormal * 0.5f;
+                float impulseX = nx * impulseMag;
+                float impulseY = ny * impulseMag;
+                float impulseZ = nz * impulseMag;
+
+                _velX[i] -= impulseX;
+                _velY[i] -= impulseY;
+                _velZ[i] -= impulseZ;
+                _velX[j] += impulseX;
+                _velY[j] += impulseY;
+                _velZ[j] += impulseZ;
+
+                // Tangential friction
+                float tanX = dvx - nx * velAlongNormal;
+                float tanY = dvy - ny * velAlongNormal;
+                float tanZ = dvz - nz * velAlongNormal;
+                float tanLenSq = tanX * tanX + tanY * tanY + tanZ * tanZ;
+
+                if (tanLenSq > 1e-8f)
+                {
+                    float tanLen = MathF.Sqrt(tanLenSq);
+                    float invTanLen = 1f / tanLen;
+                    tanX *= invTanLen;
+                    tanY *= invTanLen;
+                    tanZ *= invTanLen;
+
+                    float frictionImpulse = friction * impulseMag;
+                    _velX[i] += tanX * frictionImpulse;
+                    _velY[i] += tanY * frictionImpulse;
+                    _velZ[i] += tanZ * frictionImpulse;
+                    _velX[j] -= tanX * frictionImpulse;
+                    _velY[j] -= tanY * frictionImpulse;
+                    _velZ[j] -= tanZ * frictionImpulse;
+                }
+
+                // Wake up settled particles
+                _flags[i] &= unchecked((byte)~2);
+                _flags[j] &= unchecked((byte)~2);
+            }
+            finally
+            {
+                if (lockTakenSecond) _particleLocks[second].Exit(false);
+                if (lockTakenFirst) _particleLocks[first].Exit(false);
             }
         }
 
-        private void ResolveCollision(int i, int j)
+        #endregion
+
+        #region Parallel Bounds Handling
+
+        private void HandleBoundsParallel()
         {
-            var a = _particles[i];
-            var b = _particles[j];
+            float minX = (float)Bounds.Min.X;
+            float minY = (float)Bounds.Min.Y;
+            float minZ = (float)Bounds.Min.Z;
+            float maxX = (float)Bounds.Max.X;
+            float maxY = (float)Bounds.Max.Y;
+            float maxZ = (float)Bounds.Max.Z;
+            float restitution = (float)Restitution;
+            float friction = 1f - (float)Friction;
 
-            if (!a.IsActive || !b.IsActive)
-                return;
-
-            var delta = b.Position - a.Position;
-            double distSq = delta.MagnitudeSquared;
-            double minDist = a.Radius + b.Radius;
-
-            if (distSq >= minDist * minDist || distSq < PhysicsConstants.Epsilon)
-                return;
-
-            double dist = Math.Sqrt(distSq);
-            var normal = delta / dist;
-            double penetration = minDist - dist;
-
-            // Position correction
-            var correction = normal * (penetration * 0.5);
-            a.Position -= correction;
-            b.Position += correction;
-
-            // Velocity correction with friction
-            var relVel = b.Velocity - a.Velocity;
-            double velAlongNormal = Vector3D.Dot(relVel, normal);
-
-            if (velAlongNormal > 0)
+            Parallel.For(0, _count, i =>
             {
-                _particles[i] = a;
-                _particles[j] = b;
-                return;
-            }
+                if ((_flags[i] & 1) == 0) return;
 
-            double impulseMag = -(1 + Restitution) * velAlongNormal * 0.5;
-            var impulse = normal * impulseMag;
-
-            a.Velocity -= impulse;
-            b.Velocity += impulse;
-
-            // Tangential friction
-            var tangent = relVel - normal * velAlongNormal;
-            if (tangent.MagnitudeSquared > PhysicsConstants.Epsilon)
-            {
-                tangent = tangent.Normalized;
-                double frictionImpulse = Friction * impulseMag;
-                a.Velocity += tangent * frictionImpulse;
-                b.Velocity -= tangent * frictionImpulse;
-            }
-
-            // Wake up settled particles
-            a.IsSettled = false;
-            b.IsSettled = false;
-
-            _particles[i] = a;
-            _particles[j] = b;
-        }
-
-        private void HandleBoundCollisions()
-        {
-            for (int i = 0; i < _particles.Count; i++)
-            {
-                if (!_particles[i].IsActive)
-                    continue;
-
-                var p = _particles[i];
+                float r = _radii[i];
 
                 // Floor
-                if (p.Position.Y - p.Radius < Bounds.Min.Y)
+                if (_posY[i] - r < minY)
                 {
-                    p.Position.Y = Bounds.Min.Y + p.Radius;
-                    p.Velocity.Y = -p.Velocity.Y * Restitution;
-                    p.Velocity.X *= (1 - Friction);
-                    p.Velocity.Z *= (1 - Friction);
+                    _posY[i] = minY + r;
+                    _velY[i] = -_velY[i] * restitution;
+                    _velX[i] *= friction;
+                    _velZ[i] *= friction;
                 }
-
                 // Ceiling
-                if (p.Position.Y + p.Radius > Bounds.Max.Y)
+                if (_posY[i] + r > maxY)
                 {
-                    p.Position.Y = Bounds.Max.Y - p.Radius;
-                    p.Velocity.Y = -p.Velocity.Y * Restitution;
+                    _posY[i] = maxY - r;
+                    _velY[i] = -_velY[i] * restitution;
                 }
-
-                // Walls
-                if (p.Position.X - p.Radius < Bounds.Min.X)
+                // Walls X
+                if (_posX[i] - r < minX)
                 {
-                    p.Position.X = Bounds.Min.X + p.Radius;
-                    p.Velocity.X = -p.Velocity.X * Restitution;
+                    _posX[i] = minX + r;
+                    _velX[i] = -_velX[i] * restitution;
                 }
-                if (p.Position.X + p.Radius > Bounds.Max.X)
+                if (_posX[i] + r > maxX)
                 {
-                    p.Position.X = Bounds.Max.X - p.Radius;
-                    p.Velocity.X = -p.Velocity.X * Restitution;
+                    _posX[i] = maxX - r;
+                    _velX[i] = -_velX[i] * restitution;
                 }
-                if (p.Position.Z - p.Radius < Bounds.Min.Z)
+                // Walls Z
+                if (_posZ[i] - r < minZ)
                 {
-                    p.Position.Z = Bounds.Min.Z + p.Radius;
-                    p.Velocity.Z = -p.Velocity.Z * Restitution;
+                    _posZ[i] = minZ + r;
+                    _velZ[i] = -_velZ[i] * restitution;
                 }
-                if (p.Position.Z + p.Radius > Bounds.Max.Z)
+                if (_posZ[i] + r > maxZ)
                 {
-                    p.Position.Z = Bounds.Max.Z - p.Radius;
-                    p.Velocity.Z = -p.Velocity.Z * Restitution;
+                    _posZ[i] = maxZ - r;
+                    _velZ[i] = -_velZ[i] * restitution;
                 }
-
-                _particles[i] = p;
-            }
+            });
         }
 
-        private void CheckSettling()
+        #endregion
+
+        #region Parallel Settling
+
+        private void CheckSettlingParallel()
         {
-            double settleThreshold = 0.01;
-            double settleThresholdSq = settleThreshold * settleThreshold;
+            const float settleThresholdSq = 0.0001f; // 0.01^2
 
-            for (int i = 0; i < _particles.Count; i++)
+            Parallel.For(0, _count, i =>
             {
-                if (!_particles[i].IsActive || _particles[i].IsSettled)
-                    continue;
+                if ((_flags[i] & 1) == 0 || (_flags[i] & 2) != 0) return;
 
-                var p = _particles[i];
-                if (p.Velocity.MagnitudeSquared < settleThresholdSq)
+                float velSq = _velX[i] * _velX[i] + _velY[i] * _velY[i] + _velZ[i] * _velZ[i];
+                if (velSq < settleThresholdSq)
                 {
-                    p.Velocity = Vector3D.Zero;
-                    p.IsSettled = true;
-                    _particles[i] = p;
+                    _velX[i] = 0;
+                    _velY[i] = 0;
+                    _velZ[i] = 0;
+                    _flags[i] |= 2; // Mark as settled
                 }
-            }
+            });
         }
 
         #endregion
@@ -444,45 +759,62 @@ namespace Artemis.Particles
         /// <summary>
         /// Finds connected particles of the same color using flood fill.
         /// </summary>
-        /// <param name="startIndex">Starting particle index.</param>
-        /// <returns>List of connected particle indices.</returns>
         public List<int> FindConnectedParticles(int startIndex)
         {
-            if (startIndex < 0 || startIndex >= _particles.Count || !_particles[startIndex].IsActive)
+            if (startIndex < 0 || startIndex >= _count || (_flags[startIndex] & 1) == 0)
                 return new List<int>();
 
             var result = new List<int>();
             var visited = new HashSet<int>();
             var queue = new Queue<int>();
-            uint targetColor = _particles[startIndex].Color;
+            uint targetColor = _colors[startIndex];
 
             queue.Enqueue(startIndex);
             visited.Add(startIndex);
 
-            double connectionDistance = ParticleRadius * 2.5;
-            double connectionDistSq = connectionDistance * connectionDistance;
+            float connectionDistance = (float)ParticleRadius * 2.5f;
+            float connectionDistSq = connectionDistance * connectionDistance;
 
             while (queue.Count > 0)
             {
                 int current = queue.Dequeue();
                 result.Add(current);
 
-                var currentPos = _particles[current].Position;
+                float cx = _posX[current];
+                float cy = _posY[current];
+                float cz = _posZ[current];
 
-                // Check nearby particles
-                for (int i = 0; i < _particles.Count; i++)
+                // Use spatial hash for faster neighbor lookup
+                int cellX = (int)MathF.Floor(cx * _invCellSize);
+                int cellY = (int)MathF.Floor(cy * _invCellSize);
+                int cellZ = (int)MathF.Floor(cz * _invCellSize);
+
+                for (int dx = -1; dx <= 1; dx++)
                 {
-                    if (visited.Contains(i) || !_particles[i].IsActive)
-                        continue;
-
-                    if (_particles[i].Color != targetColor)
-                        continue;
-
-                    double distSq = Vector3D.DistanceSquared(currentPos, _particles[i].Position);
-                    if (distSq <= connectionDistSq)
+                    for (int dy = -1; dy <= 1; dy++)
                     {
-                        visited.Add(i);
-                        queue.Enqueue(i);
+                        for (int dz = -1; dz <= 1; dz++)
+                        {
+                            long cellKey = GetCellKeyFromCoords(cellX + dx, cellY + dy, cellZ + dz);
+                            if (!_grid.TryGetValue(cellKey, out var indices)) continue;
+
+                            foreach (int i in indices)
+                            {
+                                if (visited.Contains(i) || (_flags[i] & 1) == 0) continue;
+                                if (_colors[i] != targetColor) continue;
+
+                                float ddx = _posX[i] - cx;
+                                float ddy = _posY[i] - cy;
+                                float ddz = _posZ[i] - cz;
+                                float distSq = ddx * ddx + ddy * ddy + ddz * ddz;
+
+                                if (distSq <= connectionDistSq)
+                                {
+                                    visited.Add(i);
+                                    queue.Enqueue(i);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -493,33 +825,27 @@ namespace Artemis.Particles
         /// <summary>
         /// Checks if particles span from one side to another.
         /// </summary>
-        /// <param name="color">The color to check.</param>
-        /// <param name="axis">0=X, 1=Y, 2=Z</param>
-        /// <returns>True if connected from min to max on the specified axis.</returns>
         public bool CheckSpansAxis(uint color, int axis)
         {
-            // Find all particles touching the min side
-            double minThreshold = GetAxisMin(axis) + ParticleRadius * 3;
-            double maxThreshold = GetAxisMax(axis) - ParticleRadius * 3;
+            float minThreshold = GetAxisMin(axis) + (float)ParticleRadius * 3;
+            float maxThreshold = GetAxisMax(axis) - (float)ParticleRadius * 3;
 
             var startParticles = new List<int>();
-            for (int i = 0; i < _particles.Count; i++)
+            for (int i = 0; i < _count; i++)
             {
-                if (!_particles[i].IsActive || _particles[i].Color != color)
-                    continue;
+                if ((_flags[i] & 1) == 0 || _colors[i] != color) continue;
 
-                double pos = GetAxisValue(_particles[i].Position, axis);
+                float pos = GetAxisValue(i, axis);
                 if (pos <= minThreshold)
                     startParticles.Add(i);
             }
 
-            // Flood fill from each starting particle
             foreach (int start in startParticles)
             {
                 var connected = FindConnectedParticles(start);
                 foreach (int idx in connected)
                 {
-                    double pos = GetAxisValue(_particles[idx].Position, axis);
+                    float pos = GetAxisValue(idx, axis);
                     if (pos >= maxThreshold)
                         return true;
                 }
@@ -529,35 +855,30 @@ namespace Artemis.Particles
         }
 
         /// <summary>
-        /// Checks if there's a hole at the bottom of the terrarium.
+        /// Checks if there's a hole at the bottom.
         /// </summary>
         public bool HasHoleAtBottom()
         {
-            double bottom = Bounds.Min.Y + ParticleRadius * 2;
+            float bottom = (float)Bounds.Min.Y + (float)ParticleRadius * 2;
+            float checkRadius = (float)ParticleRadius * 2;
+            float checkRadiusSq = checkRadius * checkRadius;
+            float stepX = (float)ParticleRadius * 2;
+            float stepZ = (float)ParticleRadius * 2;
 
-            // Check if any position at the bottom is empty
-            double checkRadius = ParticleRadius * 2;
-            double stepX = ParticleRadius * 2;
-            double stepZ = ParticleRadius * 2;
-
-            for (double x = Bounds.Min.X + checkRadius; x < Bounds.Max.X - checkRadius; x += stepX)
+            for (float x = (float)Bounds.Min.X + checkRadius; x < (float)Bounds.Max.X - checkRadius; x += stepX)
             {
-                for (double z = Bounds.Min.Z + checkRadius; z < Bounds.Max.Z - checkRadius; z += stepZ)
+                for (float z = (float)Bounds.Min.Z + checkRadius; z < (float)Bounds.Max.Z - checkRadius; z += stepZ)
                 {
-                    var checkPos = new Vector3D(x, bottom, z);
                     bool hasParticle = false;
-
-                    for (int i = 0; i < _particles.Count; i++)
+                    for (int i = 0; i < _count && !hasParticle; i++)
                     {
-                        if (!_particles[i].IsActive)
-                            continue;
+                        if ((_flags[i] & 1) == 0) continue;
 
-                        if (Vector3D.DistanceSquared(_particles[i].Position, checkPos) <
-                            checkRadius * checkRadius)
-                        {
+                        float dx = _posX[i] - x;
+                        float dy = _posY[i] - bottom;
+                        float dz = _posZ[i] - z;
+                        if (dx * dx + dy * dy + dz * dz < checkRadiusSq)
                             hasParticle = true;
-                            break;
-                        }
                     }
 
                     if (!hasParticle)
@@ -569,42 +890,43 @@ namespace Artemis.Particles
         }
 
         /// <summary>
-        /// Checks if the terrarium is full (particles reaching the top).
+        /// Checks if the terrarium is full.
         /// </summary>
         public bool IsFull()
         {
-            double topThreshold = Bounds.Max.Y - ParticleRadius * 4;
+            float topThreshold = (float)Bounds.Max.Y - (float)ParticleRadius * 4;
 
-            for (int i = 0; i < _particles.Count; i++)
+            for (int i = 0; i < _count; i++)
             {
-                if (_particles[i].IsActive && _particles[i].Position.Y >= topThreshold)
+                if ((_flags[i] & 1) != 0 && _posY[i] >= topThreshold)
                     return true;
             }
 
             return false;
         }
 
-        private double GetAxisValue(Vector3D v, int axis) => axis switch
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private float GetAxisValue(int index, int axis) => axis switch
         {
-            0 => v.X,
-            1 => v.Y,
-            2 => v.Z,
+            0 => _posX[index],
+            1 => _posY[index],
+            2 => _posZ[index],
             _ => 0
         };
 
-        private double GetAxisMin(int axis) => axis switch
+        private float GetAxisMin(int axis) => axis switch
         {
-            0 => Bounds.Min.X,
-            1 => Bounds.Min.Y,
-            2 => Bounds.Min.Z,
+            0 => (float)Bounds.Min.X,
+            1 => (float)Bounds.Min.Y,
+            2 => (float)Bounds.Min.Z,
             _ => 0
         };
 
-        private double GetAxisMax(int axis) => axis switch
+        private float GetAxisMax(int axis) => axis switch
         {
-            0 => Bounds.Max.X,
-            1 => Bounds.Max.Y,
-            2 => Bounds.Max.Z,
+            0 => (float)Bounds.Max.X,
+            1 => (float)Bounds.Max.Y,
+            2 => (float)Bounds.Max.Z,
             _ => 0
         };
 

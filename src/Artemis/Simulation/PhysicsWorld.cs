@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using Artemis.Bodies;
 using Artemis.Collision;
 using Artemis.Core;
@@ -9,7 +12,8 @@ using Artemis.Particles;
 namespace Artemis.Simulation
 {
     /// <summary>
-    /// The main physics simulation world that manages bodies, forces, and updates.
+    /// The main physics simulation world with multi-threading support.
+    /// Manages bodies, forces, and updates with parallel collision detection.
     /// </summary>
     public class PhysicsWorld
     {
@@ -18,8 +22,17 @@ namespace Artemis.Simulation
         private readonly List<IPhysicsBody> _bodies;
         private readonly List<IForce> _globalForces;
         private readonly List<ParticleSystem> _particleSystems;
+        private readonly ConcurrentBag<CollisionInfo> _collisionBag;
         private readonly List<CollisionInfo> _collisions;
         private double _accumulator;
+
+        // Spatial hashing for broad phase
+        private readonly Dictionary<long, List<int>> _spatialGrid;
+        private const float CellSize = 2.0f;
+        private const float InvCellSize = 1f / CellSize;
+
+        // Thread synchronization
+        private readonly ReaderWriterLockSlim _bodiesLock = new();
 
         #endregion
 
@@ -28,7 +41,15 @@ namespace Artemis.Simulation
         /// <summary>
         /// Gets all bodies in the world.
         /// </summary>
-        public IReadOnlyList<IPhysicsBody> Bodies => _bodies;
+        public IReadOnlyList<IPhysicsBody> Bodies
+        {
+            get
+            {
+                _bodiesLock.EnterReadLock();
+                try { return _bodies.ToArray(); }
+                finally { _bodiesLock.ExitReadLock(); }
+            }
+        }
 
         /// <summary>
         /// Gets all global forces.
@@ -118,12 +139,13 @@ namespace Artemis.Simulation
             _globalForces = new List<IForce>();
             _particleSystems = new List<ParticleSystem>();
             _collisions = new List<CollisionInfo>();
+            _collisionBag = new ConcurrentBag<CollisionInfo>();
+            _spatialGrid = new Dictionary<long, List<int>>();
         }
 
         /// <summary>
         /// Creates a new physics world with custom gravity.
         /// </summary>
-        /// <param name="gravity">The gravity vector.</param>
         public PhysicsWorld(Vector3D gravity) : this()
         {
             Gravity = gravity;
@@ -138,10 +160,13 @@ namespace Artemis.Simulation
         /// </summary>
         public void AddBody(IPhysicsBody body)
         {
-            if (!_bodies.Contains(body))
+            _bodiesLock.EnterWriteLock();
+            try
             {
-                _bodies.Add(body);
+                if (!_bodies.Contains(body))
+                    _bodies.Add(body);
             }
+            finally { _bodiesLock.ExitWriteLock(); }
         }
 
         /// <summary>
@@ -149,7 +174,9 @@ namespace Artemis.Simulation
         /// </summary>
         public bool RemoveBody(IPhysicsBody body)
         {
-            return _bodies.Remove(body);
+            _bodiesLock.EnterWriteLock();
+            try { return _bodies.Remove(body); }
+            finally { _bodiesLock.ExitWriteLock(); }
         }
 
         /// <summary>
@@ -157,7 +184,9 @@ namespace Artemis.Simulation
         /// </summary>
         public IPhysicsBody? GetBody(string id)
         {
-            return _bodies.Find(b => b.Id == id);
+            _bodiesLock.EnterReadLock();
+            try { return _bodies.Find(b => b.Id == id); }
+            finally { _bodiesLock.ExitReadLock(); }
         }
 
         /// <summary>
@@ -165,194 +194,258 @@ namespace Artemis.Simulation
         /// </summary>
         public void ClearBodies()
         {
-            _bodies.Clear();
+            _bodiesLock.EnterWriteLock();
+            try { _bodies.Clear(); }
+            finally { _bodiesLock.ExitWriteLock(); }
         }
 
         #endregion
 
         #region Force Management
 
-        /// <summary>
-        /// Adds a global force that affects all bodies.
-        /// </summary>
         public void AddForce(IForce force)
         {
             if (!_globalForces.Contains(force))
-            {
                 _globalForces.Add(force);
-            }
         }
 
-        /// <summary>
-        /// Removes a global force.
-        /// </summary>
-        public bool RemoveForce(IForce force)
-        {
-            return _globalForces.Remove(force);
-        }
-
-        /// <summary>
-        /// Clears all global forces.
-        /// </summary>
-        public void ClearForces()
-        {
-            _globalForces.Clear();
-        }
+        public bool RemoveForce(IForce force) => _globalForces.Remove(force);
+        public void ClearForces() => _globalForces.Clear();
 
         #endregion
 
         #region Particle System Management
 
-        /// <summary>
-        /// Adds a particle system to the world.
-        /// </summary>
         public void AddParticleSystem(ParticleSystem system)
         {
             if (!_particleSystems.Contains(system))
-            {
                 _particleSystems.Add(system);
-            }
         }
 
-        /// <summary>
-        /// Removes a particle system from the world.
-        /// </summary>
-        public bool RemoveParticleSystem(ParticleSystem system)
-        {
-            return _particleSystems.Remove(system);
-        }
+        public bool RemoveParticleSystem(ParticleSystem system) => _particleSystems.Remove(system);
 
         #endregion
 
-        #region Simulation
+        #region Simulation (Multi-threaded)
 
         /// <summary>
-        /// Updates the physics simulation.
+        /// Updates the physics simulation with multi-threading.
         /// </summary>
-        /// <param name="deltaTime">Time since last update in seconds.</param>
         public void Update(double deltaTime)
         {
             if (IsPaused)
                 return;
 
-            // Accumulate time
             _accumulator += deltaTime;
 
-            // Limit accumulator to prevent spiral of death
             double maxAccumulator = FixedTimeStep * MaxSubSteps;
             if (_accumulator > maxAccumulator)
                 _accumulator = maxAccumulator;
 
-            // Fixed time step simulation
             while (_accumulator >= FixedTimeStep)
             {
                 Step(FixedTimeStep);
                 _accumulator -= FixedTimeStep;
             }
 
-            // Update particle systems with remaining time
-            foreach (var system in _particleSystems)
-            {
-                system.Update(deltaTime);
-            }
+            // Update particle systems in parallel
+            Parallel.ForEach(_particleSystems, system => system.Update(deltaTime));
         }
 
         /// <summary>
-        /// Performs a single physics step.
+        /// Performs a single physics step with parallel processing.
         /// </summary>
-        /// <param name="dt">Time step in seconds.</param>
         public void Step(double dt)
         {
             OnPreStep?.Invoke(dt);
 
-            // Clear previous collision info
             _collisions.Clear();
 
-            // Apply gravity and global forces to all bodies
-            ApplyForces(dt);
+            // Apply forces in parallel
+            ApplyForcesParallel(dt);
 
-            // Integrate velocities and positions
-            IntegrateBodies(dt);
+            // Integrate in parallel
+            IntegrateBodiesParallel(dt);
 
-            // Detect collisions
-            DetectCollisions();
+            // Build spatial grid and detect collisions
+            BuildSpatialGrid();
+            DetectCollisionsParallel();
 
-            // Resolve collisions
+            // Resolve collisions (sequential for determinism)
             ResolveCollisions();
 
-            // Update simulation time
             TotalTime += dt;
             StepCount++;
 
             OnPostStep?.Invoke(dt);
         }
 
-        private void ApplyForces(double dt)
+        private void ApplyForcesParallel(double dt)
         {
-            foreach (var body in _bodies)
+            _bodiesLock.EnterReadLock();
+            try
             {
-                if (body.BodyType != BodyType.Dynamic || !body.IsActive || body.IsSleeping)
-                    continue;
+                var gravity = Gravity;
+                var forces = _globalForces.ToArray();
 
-                // Apply gravity
-                body.ApplyForce(Gravity * body.Mass);
-
-                // Apply global forces
-                foreach (var force in _globalForces)
+                Parallel.ForEach(_bodies, body =>
                 {
-                    if (force.Enabled)
+                    if (body.BodyType != BodyType.Dynamic || !body.IsActive || body.IsSleeping)
+                        return;
+
+                    body.ApplyForce(gravity * body.Mass);
+
+                    foreach (var force in forces)
                     {
-                        var f = force.Calculate(body.Position, body.Velocity, body.Mass);
-                        body.ApplyForce(f);
+                        if (force.Enabled)
+                        {
+                            var f = force.Calculate(body.Position, body.Velocity, body.Mass);
+                            body.ApplyForce(f);
+                        }
                     }
-                }
+                });
             }
+            finally { _bodiesLock.ExitReadLock(); }
         }
 
-        private void IntegrateBodies(double dt)
+        private void IntegrateBodiesParallel(double dt)
         {
-            foreach (var body in _bodies)
+            _bodiesLock.EnterReadLock();
+            try
             {
-                if (!body.IsActive)
-                    continue;
+                var bounds = WorldBounds;
 
-                body.Integrate(dt);
-
-                // Check world bounds
-                if (WorldBounds.HasValue && !WorldBounds.Value.Contains(body.Position))
+                Parallel.ForEach(_bodies, body =>
                 {
-                    // Option: deactivate or wrap around
-                    // body.IsActive = false;
-                }
+                    if (!body.IsActive) return;
+
+                    body.Integrate(dt);
+
+                    // Check world bounds (optional deactivation)
+                    // if (bounds.HasValue && !bounds.Value.Contains(body.Position))
+                    //     body.IsActive = false;
+                });
             }
+            finally { _bodiesLock.ExitReadLock(); }
         }
 
-        private void DetectCollisions()
+        private void BuildSpatialGrid()
         {
-            // Broad phase: simple O(n²) for now
-            // For larger simulations, implement spatial partitioning (octree, grid)
-            for (int i = 0; i < _bodies.Count; i++)
+            _spatialGrid.Clear();
+
+            _bodiesLock.EnterReadLock();
+            try
             {
-                var bodyA = _bodies[i];
-                if (!bodyA.IsActive)
-                    continue;
-
-                for (int j = i + 1; j < _bodies.Count; j++)
+                for (int i = 0; i < _bodies.Count; i++)
                 {
-                    var bodyB = _bodies[j];
-                    if (!bodyB.IsActive)
-                        continue;
+                    var body = _bodies[i];
+                    if (!body.IsActive) continue;
 
-                    // Skip if both are static
-                    if (bodyA.BodyType == BodyType.Static && bodyB.BodyType == BodyType.Static)
-                        continue;
+                    var pos = body.Position;
+                    long cellKey = GetCellKey((float)pos.X, (float)pos.Y, (float)pos.Z);
 
-                    var collision = CollisionDetector.Detect(bodyA, bodyB);
-                    if (collision.HasCollision)
+                    if (!_spatialGrid.TryGetValue(cellKey, out var list))
                     {
-                        _collisions.Add(collision);
+                        list = new List<int>(8);
+                        _spatialGrid[cellKey] = list;
                     }
+                    list.Add(i);
                 }
+            }
+            finally { _bodiesLock.ExitReadLock(); }
+        }
+
+        private static long GetCellKey(float x, float y, float z)
+        {
+            int cx = (int)MathF.Floor(x * InvCellSize);
+            int cy = (int)MathF.Floor(y * InvCellSize);
+            int cz = (int)MathF.Floor(z * InvCellSize);
+            return ((long)(cx & 0x1FFFFF) << 42) | ((long)(cy & 0x1FFFFF) << 21) | (cz & 0x1FFFFF);
+        }
+
+        private static long GetCellKeyFromCoords(int cx, int cy, int cz)
+        {
+            return ((long)(cx & 0x1FFFFF) << 42) | ((long)(cy & 0x1FFFFF) << 21) | (cz & 0x1FFFFF);
+        }
+
+        private void DetectCollisionsParallel()
+        {
+            // Clear the concurrent bag
+            while (_collisionBag.TryTake(out _)) { }
+
+            _bodiesLock.EnterReadLock();
+            try
+            {
+                var cells = _spatialGrid.ToArray();
+                var bodiesArray = _bodies.ToArray();
+
+                Parallel.ForEach(cells, cell =>
+                {
+                    var indices = cell.Value;
+                    long cellKey = cell.Key;
+
+                    // Unpack cell coordinates
+                    int cx = (int)((cellKey >> 42) & 0x1FFFFF);
+                    int cy = (int)((cellKey >> 21) & 0x1FFFFF);
+                    int cz = (int)(cellKey & 0x1FFFFF);
+                    if (cx >= 0x100000) cx -= 0x200000;
+                    if (cy >= 0x100000) cy -= 0x200000;
+                    if (cz >= 0x100000) cz -= 0x200000;
+
+                    // Check within cell
+                    for (int i = 0; i < indices.Count; i++)
+                    {
+                        for (int j = i + 1; j < indices.Count; j++)
+                        {
+                            CheckCollisionPair(bodiesArray, indices[i], indices[j]);
+                        }
+                    }
+
+                    // Check neighboring cells (positive direction only to avoid duplicates)
+                    for (int dx = 0; dx <= 1; dx++)
+                    {
+                        for (int dy = 0; dy <= 1; dy++)
+                        {
+                            for (int dz = 0; dz <= 1; dz++)
+                            {
+                                if (dx == 0 && dy == 0 && dz == 0) continue;
+
+                                long neighborKey = GetCellKeyFromCoords(cx + dx, cy + dy, cz + dz);
+                                if (!_spatialGrid.TryGetValue(neighborKey, out var neighborIndices)) continue;
+
+                                foreach (var i in indices)
+                                {
+                                    foreach (var j in neighborIndices)
+                                    {
+                                        CheckCollisionPair(bodiesArray, i, j);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+
+                // Transfer from concurrent bag to list
+                while (_collisionBag.TryTake(out var collision))
+                {
+                    _collisions.Add(collision);
+                }
+            }
+            finally { _bodiesLock.ExitReadLock(); }
+        }
+
+        private void CheckCollisionPair(IPhysicsBody[] bodies, int i, int j)
+        {
+            var bodyA = bodies[i];
+            var bodyB = bodies[j];
+
+            if (!bodyA.IsActive || !bodyB.IsActive) return;
+            if (bodyA.BodyType == BodyType.Static && bodyB.BodyType == BodyType.Static) return;
+
+            var collision = CollisionDetector.Detect(bodyA, bodyB);
+            if (collision.HasCollision)
+            {
+                _collisionBag.Add(collision);
             }
         }
 
@@ -372,84 +465,92 @@ namespace Artemis.Simulation
         /// <summary>
         /// Casts a ray through the world.
         /// </summary>
-        /// <param name="origin">Ray origin.</param>
-        /// <param name="direction">Ray direction (normalized).</param>
-        /// <param name="maxDistance">Maximum ray distance.</param>
-        /// <returns>Hit info or null if no hit.</returns>
         public RaycastHit? Raycast(Vector3D origin, Vector3D direction, double maxDistance = 1000)
         {
             RaycastHit? closest = null;
             double closestDist = maxDistance;
 
-            foreach (var body in _bodies)
+            _bodiesLock.EnterReadLock();
+            try
             {
-                if (!body.IsActive)
-                    continue;
-
-                if (body is RigidBody rb)
+                foreach (var body in _bodies)
                 {
-                    if (CollisionDetector.Raycast(origin, direction, rb, closestDist,
-                        out double dist, out Vector3D point, out Vector3D normal))
+                    if (!body.IsActive) continue;
+
+                    if (body is RigidBody rb)
                     {
-                        if (dist < closestDist)
+                        if (CollisionDetector.Raycast(origin, direction, rb, closestDist,
+                            out double dist, out Vector3D point, out Vector3D normal))
                         {
-                            closestDist = dist;
-                            closest = new RaycastHit
+                            if (dist < closestDist)
                             {
-                                Body = body,
-                                Distance = dist,
-                                Point = point,
-                                Normal = normal
-                            };
+                                closestDist = dist;
+                                closest = new RaycastHit
+                                {
+                                    Body = body,
+                                    Distance = dist,
+                                    Point = point,
+                                    Normal = normal
+                                };
+                            }
                         }
                     }
                 }
             }
+            finally { _bodiesLock.ExitReadLock(); }
 
             return closest;
         }
 
         /// <summary>
-        /// Gets all bodies within a sphere.
+        /// Gets all bodies within a sphere (parallelized).
         /// </summary>
         public List<IPhysicsBody> QuerySphere(Vector3D center, double radius)
         {
-            var results = new List<IPhysicsBody>();
+            var results = new ConcurrentBag<IPhysicsBody>();
             double radiusSq = radius * radius;
 
-            foreach (var body in _bodies)
+            _bodiesLock.EnterReadLock();
+            try
             {
-                if (!body.IsActive)
-                    continue;
-
-                if (Vector3D.DistanceSquared(center, body.Position) <= radiusSq)
+                Parallel.ForEach(_bodies, body =>
                 {
-                    results.Add(body);
-                }
-            }
+                    if (!body.IsActive) return;
 
-            return results;
+                    if (Vector3D.DistanceSquared(center, body.Position) <= radiusSq)
+                    {
+                        results.Add(body);
+                    }
+                });
+            }
+            finally { _bodiesLock.ExitReadLock(); }
+
+            return new List<IPhysicsBody>(results);
         }
 
         /// <summary>
-        /// Gets all bodies within an AABB.
+        /// Gets all bodies within an AABB (parallelized).
         /// </summary>
         public List<IPhysicsBody> QueryAABB(AABB bounds)
         {
-            var results = new List<IPhysicsBody>();
+            var results = new ConcurrentBag<IPhysicsBody>();
 
-            foreach (var body in _bodies)
+            _bodiesLock.EnterReadLock();
+            try
             {
-                if (!body.IsActive)
-                    continue;
-
-                if (bounds.Intersects(body.BoundingBox))
+                Parallel.ForEach(_bodies, body =>
                 {
-                    results.Add(body);
-                }
-            }
+                    if (!body.IsActive) return;
 
-            return results;
+                    if (bounds.Intersects(body.BoundingBox))
+                    {
+                        results.Add(body);
+                    }
+                });
+            }
+            finally { _bodiesLock.ExitReadLock(); }
+
+            return new List<IPhysicsBody>(results);
         }
 
         #endregion
@@ -466,11 +567,15 @@ namespace Artemis.Simulation
             _accumulator = 0;
             _collisions.Clear();
 
-            // Wake up all bodies
-            foreach (var body in _bodies)
+            _bodiesLock.EnterReadLock();
+            try
             {
-                body.WakeUp();
+                foreach (var body in _bodies)
+                {
+                    body.WakeUp();
+                }
             }
+            finally { _bodiesLock.ExitReadLock(); }
         }
 
         /// <summary>
@@ -491,29 +596,21 @@ namespace Artemis.Simulation
         /// </summary>
         public void CreateWalls(double width, double height, double depth, double thickness = 1)
         {
-            // Left wall
             AddBody(RigidBody.CreateStaticBox(
                 new Vector3D(-width / 2 - thickness / 2, height / 2, 0),
-                new Vector3D(thickness / 2, height / 2, depth / 2)
-            ));
+                new Vector3D(thickness / 2, height / 2, depth / 2)));
 
-            // Right wall
             AddBody(RigidBody.CreateStaticBox(
                 new Vector3D(width / 2 + thickness / 2, height / 2, 0),
-                new Vector3D(thickness / 2, height / 2, depth / 2)
-            ));
+                new Vector3D(thickness / 2, height / 2, depth / 2)));
 
-            // Front wall
             AddBody(RigidBody.CreateStaticBox(
                 new Vector3D(0, height / 2, depth / 2 + thickness / 2),
-                new Vector3D(width / 2, height / 2, thickness / 2)
-            ));
+                new Vector3D(width / 2, height / 2, thickness / 2)));
 
-            // Back wall
             AddBody(RigidBody.CreateStaticBox(
                 new Vector3D(0, height / 2, -depth / 2 - thickness / 2),
-                new Vector3D(width / 2, height / 2, thickness / 2)
-            ));
+                new Vector3D(width / 2, height / 2, thickness / 2)));
         }
 
         #endregion
@@ -524,16 +621,9 @@ namespace Artemis.Simulation
     /// </summary>
     public struct RaycastHit
     {
-        /// <summary>The body that was hit.</summary>
         public IPhysicsBody Body;
-
-        /// <summary>Distance from ray origin to hit point.</summary>
         public double Distance;
-
-        /// <summary>Hit point in world coordinates.</summary>
         public Vector3D Point;
-
-        /// <summary>Surface normal at hit point.</summary>
         public Vector3D Normal;
     }
 }
