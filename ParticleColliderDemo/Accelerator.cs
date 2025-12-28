@@ -24,7 +24,7 @@ public class Accelerator
         _accelerator = new Accelerator2D(center, radius, beamEnergy);
     }
 
-    public RadialForceEffector2D GetMagneticField() => _accelerator.GetMagneticField();
+    // public RadialForceEffector2D GetMagneticField() => _accelerator.GetMagneticField();
 
     public void InjectBeam1(ParticleType type, int count)
     {
@@ -93,37 +93,31 @@ public class Accelerator
 
     public void Update(double deltaTime)
     {
-        // 1. Apply RF Acceleration
+        // 1. Apply RF Acceleration (increase Energy)
         _accelerator.ApplyRFAccelerationParallel(deltaTime);
 
-        // 2. Adjust Magnetic Field Strength (Synchrotron principle)
-        // B = p / (q * r)  where p is momentum
-        // Force F = qvB = mv^2/r -> B = mv/qr = p/qr
+        // 2. Apply Magnetic Field (Lorentz Force) to turn particles
+        _accelerator.ApplyMagneticFieldParallel(deltaTime);
 
-        // We calculate required B for the average energy/momentum of the beam
+        // 3. Dynamic adjustment of B-field (Synchrotron)
+        // We need B such that q*v*B = m*v^2 / R  => B = m*v / (q*R) = p / (q*R)
+        // We calculate average momentum and set B accordingly.
+
         var (b1, b2, avgE) = GetStatistics();
         if (avgE > 0)
         {
-            // Approximate average speed/momentum
-            // For simplicity, let's just scale B with Energy roughly or use a strong enough force
-            // F_centripetal = m * v^2 / r
-            // Kinetic Energy K = 0.5 * m * v^2 -> v^2 = 2K/m
-            // F = m * (2K/m) / r = 2K / r
+            // Assuming protons (mass ~ 1, charge 1) for simplified calc or average
+            // p = sqrt(2 * m * E)
+            double mass = 1.0;
+            double p = Math.Sqrt(2 * mass * avgE);
+            double q = 1.0;
 
-            // So we need a force of magnitude 2K/r pointing to center.
-            // The RadialForceEffector applies a force.
-            // We set its strength to -2K/r (negative for attraction)
+            double requiredB = p / (q * Radius);
 
-            double requiredForce = -(2.0 * avgE) / Radius;
+            // Ensure B is strong enough, maybe add safety factor
+            // requiredB *= 1.0;
 
-            // Add a safety factor to keep them tight
-            requiredForce *= 1.2;
-
-            // Limit to max reasonable force to prevent numerical explosion
-             if (Math.Abs(requiredForce) > 10000) requiredForce = -10000;
-             if (Math.Abs(requiredForce) < 50) requiredForce = -50;
-
-            _accelerator.SetMagneticFieldStrength(requiredForce);
+            _accelerator.SetMagneticFieldStrength(requiredB);
         }
     }
 
