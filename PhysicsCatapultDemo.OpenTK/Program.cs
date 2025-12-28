@@ -102,8 +102,32 @@ public class CatapultWindow : GraphicsWindow
         if (KeyboardState.IsKeyDown(Keys.D))
             _catapult.AdjustPower(5);
 
-        // Launch
-        if (KeyboardState.IsKeyPressed(Keys.Space))
+        // Mouse controls
+        var mouse = MouseState;
+
+        // Aim with mouse
+        // Convert screen to world. Note: Mouse origin is Top-Left, but WorldToScreen uses bottom-up Y if not flipped.
+        // GraphicsWindow.WorldToScreen logic: sy = (1 - ny) * 0.5f * Size.Y; (Top-Left origin for screen)
+        // So we need to reverse this.
+
+        // Manual ScreenToWorld (since we don't have a public helper in base class for this direction)
+        float aspect = (float)Size.X / Size.Y;
+        float halfWidth = (float)(CameraZoom * aspect);
+        float halfHeight = (float)CameraZoom;
+
+        // Normalized device coordinates (-1 to 1)
+        float nx = (mouse.Position.X / Size.X) * 2f - 1f;
+        float ny = 1f - (mouse.Position.Y / Size.Y) * 2f; // Flip Y back to standard Cartesian
+
+        Vector2 worldMousePos = new Vector2(
+            (float)CameraPosition.X + nx * halfWidth,
+            (float)CameraPosition.Y + ny * halfHeight
+        );
+
+        _catapult.SetAim(worldMousePos);
+
+        // Launch with mouse
+        if (mouse.IsButtonPressed(MouseButton.Left) || KeyboardState.IsKeyPressed(Keys.Space))
             LaunchProjectile();
 
         // Level selection
