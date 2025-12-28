@@ -73,8 +73,12 @@ public class ParticleColliderWindow : GraphicsWindow
         double projX = rx;
         double projY = ry * MathF.Cos(CavalierAngle) + height;
 
-        return new Vector2(projX, projY);
+        return new Vector2((float)projX, (float)projY);
     }
+
+    // Overload for Vector2 input
+    private Vector2 ToCavalier(Vector2 pos, float height = 0)
+        => ToCavalier(new Vector2D(pos.X, pos.Y), height);
 
     /// <summary>
     /// Get depth value for sorting (higher Y = further back)
@@ -609,7 +613,7 @@ public class ParticleColliderWindow : GraphicsWindow
         for (int i = 0; i < vLines; i++)
         {
             double angle = 2 * Math.PI * i / vLines;
-            var offset = new Vector2(Math.Cos(angle) * radius, Math.Sin(angle) * radius);
+            var offset = new Vector2D(Math.Cos(angle) * radius, Math.Sin(angle) * radius);
             var top = ToCavalier(pos + offset, RingHeight + 2);
             var bot = ToCavalier(pos + offset, RingHeight - 2);
             DrawLine(top, bot, new Color4(color.R * 0.7f, color.G * 0.7f, color.B * 0.7f, color.A * 0.5f), 1f);
