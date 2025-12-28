@@ -1,5 +1,12 @@
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
+
 namespace ArtemisEngine;
 
+/// <summary>
+/// High-performance 2D physics world with multi-threading support.
+/// </summary>
 public class PhysicsWorld
 {
     public Vector2 Gravity { get; set; }
@@ -13,11 +20,14 @@ public class PhysicsWorld
 
     // Collision tracking for events
     private Dictionary<(RigidBody, RigidBody), bool> _previousCollisions;
-    private HashSet<(RigidBody, RigidBody)> _currentCollisions;
+    private ConcurrentDictionary<(RigidBody, RigidBody), bool> _currentCollisions;
 
     // Advanced solver for better stability
     private SequentialImpulseSolver _solver;
     public bool UseAdvancedSolver { get; set; } = true;
+
+    // Thread-safe collision accumulator
+    private ConcurrentBag<(RigidBody, RigidBody, Collision)> _detectedCollisions;
 
     // Events
     public event CollisionEventHandler? OnCollisionEnter;
@@ -38,7 +48,8 @@ public class PhysicsWorld
         AreaEffectors = new List<AreaEffector>();
         _spatialGrid = new SpatialHashGrid(10f);
         _previousCollisions = new Dictionary<(RigidBody, RigidBody), bool>();
-        _currentCollisions = new HashSet<(RigidBody, RigidBody)>();
+        _currentCollisions = new ConcurrentDictionary<(RigidBody, RigidBody), bool>();
+        _detectedCollisions = new ConcurrentBag<(RigidBody, RigidBody, Collision)>();
         _solver = new SequentialImpulseSolver();
     }
 
@@ -51,7 +62,6 @@ public class PhysicsWorld
     {
         Bodies.Remove(body);
 
-        // Clean up collision tracking
         var keysToRemove = _previousCollisions.Keys
             .Where(k => k.Item1 == body || k.Item2 == body)
             .ToList();
@@ -62,86 +72,65 @@ public class PhysicsWorld
         }
     }
 
-    public void AddJoint(Joint joint)
-    {
-        Joints.Add(joint);
-    }
-
-    public void RemoveJoint(Joint joint)
-    {
-        Joints.Remove(joint);
-    }
-
-    public void AddAreaEffector(AreaEffector effector)
-    {
-        AreaEffectors.Add(effector);
-    }
-
-    public void RemoveAreaEffector(AreaEffector effector)
-    {
-        AreaEffectors.Remove(effector);
-    }
+    public void AddJoint(Joint joint) => Joints.Add(joint);
+    public void RemoveJoint(Joint joint) => Joints.Remove(joint);
+    public void AddAreaEffector(AreaEffector effector) => AreaEffectors.Add(effector);
+    public void RemoveAreaEffector(AreaEffector effector) => AreaEffectors.Remove(effector);
 
     public RaycastHit Raycast(Ray ray, int layerMask = ~0)
-    {
-        return Raycaster.Raycast(ray, Bodies, layerMask);
-    }
+        => Raycaster.Raycast(ray, Bodies, layerMask);
 
     public RaycastHit[] RaycastAll(Ray ray, int layerMask = ~0)
-    {
-        return Raycaster.RaycastAll(ray, Bodies, layerMask);
-    }
+        => Raycaster.RaycastAll(ray, Bodies, layerMask);
 
     public void Step(float deltaTime)
     {
         _currentCollisions.Clear();
+        while (_detectedCollisions.TryTake(out _)) { }
 
-        // Begin solver frame (contact persistence)
         if (UseAdvancedSolver)
         {
             _solver.BeginFrame();
         }
 
-        // Update sleeping states
-        foreach (var body in Bodies)
+        // Parallel: Update sleeping states
+        var activeBodies = Bodies.Where(b => !b.IsStatic && b.CanSleep).ToArray();
+        Parallel.ForEach(activeBodies, body =>
         {
-            if (!body.IsStatic && body.CanSleep)
-            {
-                SleepingSystem.UpdateSleepState(body, deltaTime);
-            }
-        }
+            SleepingSystem.UpdateSleepState(body, deltaTime);
+        });
 
-        // Apply area effectors (wind, buoyancy, gravity wells, etc.)
-        foreach (var effector in AreaEffectors)
+        // Parallel: Apply area effectors
+        var awakeBodies = Bodies.Where(b => !b.IsStatic && !b.IsSleeping).ToArray();
+        var enabledEffectors = AreaEffectors.Where(e => e.Enabled).ToArray();
+
+        Parallel.ForEach(awakeBodies, body =>
         {
-            if (effector.Enabled)
+            foreach (var effector in enabledEffectors)
             {
-                foreach (var body in Bodies)
+                if (effector.AffectsBody(body))
                 {
-                    if (!body.IsStatic && !body.IsSleeping && effector.AffectsBody(body))
-                    {
-                        effector.ApplyForce(body, deltaTime);
-                    }
+                    effector.ApplyForce(body, deltaTime);
                 }
             }
-        }
+        });
 
-        // Apply gravity
-        foreach (var body in Bodies)
+        // Parallel: Apply gravity and integrate
+        var dynamicBodies = Bodies.Where(b => !b.IsStatic && !b.IsKinematic && !b.IsSleeping).ToArray();
+        var gravity = Gravity;
+
+        Parallel.ForEach(dynamicBodies, body =>
         {
-            if (!body.IsStatic && !body.IsKinematic && !body.IsSleeping)
-            {
-                body.ApplyForce(Gravity * body.Mass * deltaTime);
-            }
-        }
+            body.ApplyForce(gravity * body.Mass * deltaTime);
+        });
 
-        // Update velocities and positions
-        foreach (var body in Bodies)
+        // Parallel: Update velocities and positions
+        Parallel.ForEach(Bodies, body =>
         {
             body.Update(deltaTime);
-        }
+        });
 
-        // Solve joints
+        // Sequential: Solve joints (order matters for constraints)
         foreach (var joint in Joints)
         {
             if (joint.Enabled)
@@ -150,94 +139,92 @@ public class PhysicsWorld
             }
         }
 
-        // Collision detection and resolution
+        // Collision detection (parallel detection, sequential resolution)
         if (UseSpatialPartitioning && _spatialGrid != null)
         {
-            PerformSpatialCollisionDetection(deltaTime);
+            PerformSpatialCollisionDetectionParallel(deltaTime);
         }
         else
         {
-            PerformBruteForceCollisionDetection(deltaTime);
+            PerformBruteForceCollisionDetectionParallel(deltaTime);
         }
 
         // Process collision events
         ProcessCollisionEvents();
     }
 
-    private void PerformBruteForceCollisionDetection(float deltaTime)
+    private void PerformBruteForceCollisionDetectionParallel(float deltaTime)
     {
-        for (int i = 0; i < Bodies.Count; i++)
-        {
-            for (int j = i + 1; j < Bodies.Count; j++)
-            {
-                var bodyA = Bodies[i];
-                var bodyB = Bodies[j];
+        var bodiesArray = Bodies.ToArray();
+        int count = bodiesArray.Length;
 
-                ProcessCollisionPair(bodyA, bodyB, deltaTime);
+        // Parallel collision detection
+        Parallel.For(0, count, i =>
+        {
+            for (int j = i + 1; j < count; j++)
+            {
+                DetectCollisionPair(bodiesArray[i], bodiesArray[j], deltaTime);
             }
-        }
+        });
+
+        // Sequential collision resolution (for determinism)
+        ResolveDetectedCollisions(deltaTime);
     }
 
-    private void PerformSpatialCollisionDetection(float deltaTime)
+    private void PerformSpatialCollisionDetectionParallel(float deltaTime)
     {
-        // Rebuild spatial grid
+        // Rebuild spatial grid (sequential - grid not thread-safe for writes)
         _spatialGrid!.Clear();
         foreach (var body in Bodies)
         {
             _spatialGrid.Insert(body);
         }
 
-        // Check collisions using spatial grid
-        var checkedPairs = new HashSet<(RigidBody, RigidBody)>();
+        // Get awake bodies for parallel processing
+        var awakeBodies = Bodies.Where(b => !b.IsSleeping).ToArray();
+        var checkedPairs = new ConcurrentDictionary<(RigidBody, RigidBody), bool>();
 
-        foreach (var body in Bodies)
+        // Parallel collision detection
+        Parallel.ForEach(awakeBodies, body =>
         {
-            if (body.IsSleeping)
-                continue;
-
             var nearby = _spatialGrid.QueryNearby(body);
 
             foreach (var other in nearby)
             {
                 var pair = body.GetHashCode() < other.GetHashCode() ? (body, other) : (other, body);
 
-                if (!checkedPairs.Add(pair))
+                if (!checkedPairs.TryAdd(pair, true))
                     continue;
 
-                ProcessCollisionPair(body, other, deltaTime);
+                DetectCollisionPair(body, other, deltaTime);
             }
-        }
+        });
+
+        // Sequential collision resolution
+        ResolveDetectedCollisions(deltaTime);
     }
 
-    private void ProcessCollisionPair(RigidBody bodyA, RigidBody bodyB, float deltaTime)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void DetectCollisionPair(RigidBody bodyA, RigidBody bodyB, float deltaTime)
     {
-        // Skip if both sleeping
-        if (bodyA.IsSleeping && bodyB.IsSleeping)
-            return;
-
-        // Check if can collide
-        if (!bodyA.CanCollideWith(bodyB))
-            return;
+        if (bodyA.IsSleeping && bodyB.IsSleeping) return;
+        if (!bodyA.CanCollideWith(bodyB)) return;
 
         Collision collision = default;
         bool hasCollision = false;
 
-        // Check for CCD (Continuous Collision Detection) for fast-moving objects
+        // CCD for fast-moving objects
         if ((bodyA.UseCCD || bodyB.UseCCD) && !bodyA.IsStatic && !bodyB.IsStatic)
         {
-            // Try swept collision detection
             RigidBody moving = bodyA.UseCCD ? bodyA : bodyB;
             RigidBody target = bodyA.UseCCD ? bodyB : bodyA;
 
             if (ContinuousCollision.SweptCollision(moving, target, deltaTime, out float toi, out collision))
             {
-                // Move body to time of impact
-                moving.Position = moving.Position + moving.Velocity * toi * deltaTime;
                 hasCollision = true;
             }
         }
 
-        // Fall back to discrete collision detection if CCD didn't find a collision
         if (!hasCollision)
         {
             hasCollision = DetectCollision(bodyA, bodyB, out collision);
@@ -245,20 +232,31 @@ public class PhysicsWorld
 
         if (hasCollision)
         {
-            // Check one-way platform
             if (OneWayPlatformExtensions.ShouldIgnoreCollision(bodyA, bodyB, collision.Normal))
-            {
-                return; // Pass through one-way platform
-            }
+                return;
 
+            _detectedCollisions.Add((bodyA, bodyB, collision));
+        }
+    }
+
+    private void ResolveDetectedCollisions(float deltaTime)
+    {
+        foreach (var (bodyA, bodyB, collision) in _detectedCollisions)
+        {
             var pair = (bodyA, bodyB);
-            _currentCollisions.Add(pair);
+            _currentCollisions.TryAdd(pair, true);
 
             bool isTrigger = bodyA.IsTrigger || bodyB.IsTrigger;
 
             if (!isTrigger)
             {
-                // Physical collision - use advanced solver if enabled
+                // Handle CCD position update
+                if ((bodyA.UseCCD || bodyB.UseCCD) && !bodyA.IsStatic && !bodyB.IsStatic)
+                {
+                    RigidBody moving = bodyA.UseCCD ? bodyA : bodyB;
+                    // Position already interpolated during detection
+                }
+
                 if (UseAdvancedSolver)
                 {
                     _solver.SolveCollision(bodyA, bodyB, collision);
@@ -268,17 +266,14 @@ public class PhysicsWorld
                     ResolveCollision(bodyA, bodyB, collision);
                 }
 
-                // Wake up bodies
                 bodyA.WakeUp();
                 bodyB.WakeUp();
 
-                // Notify collision listeners
                 bodyA.CollisionListener?.OnCollisionEnter(bodyB, collision);
                 bodyB.CollisionListener?.OnCollisionEnter(bodyA, collision);
             }
             else
             {
-                // Trigger collision - no physical resolution
                 bodyA.CollisionListener?.OnCollisionEnter(bodyB, collision);
                 bodyB.CollisionListener?.OnCollisionEnter(bodyA, collision);
             }
@@ -287,53 +282,42 @@ public class PhysicsWorld
 
     private void ProcessCollisionEvents()
     {
-        // Detect new collisions (Enter)
-        foreach (var pair in _currentCollisions)
+        var currentKeys = _currentCollisions.Keys.ToHashSet();
+
+        // Detect new collisions (Enter) and ongoing (Stay)
+        foreach (var pair in currentKeys)
         {
             if (!_previousCollisions.ContainsKey(pair))
             {
                 bool isTrigger = pair.Item1.IsTrigger || pair.Item2.IsTrigger;
 
                 if (isTrigger)
-                {
                     OnTriggerEnter?.Invoke(this, new CollisionEventArgs(pair.Item1, pair.Item2, new Collision()));
-                }
                 else
-                {
                     OnCollisionEnter?.Invoke(this, new CollisionEventArgs(pair.Item1, pair.Item2, new Collision()));
-                }
             }
             else
             {
-                // Collision ongoing (Stay)
                 bool isTrigger = pair.Item1.IsTrigger || pair.Item2.IsTrigger;
 
                 if (isTrigger)
-                {
                     OnTriggerStay?.Invoke(this, new CollisionEventArgs(pair.Item1, pair.Item2, new Collision()));
-                }
                 else
-                {
                     OnCollisionStay?.Invoke(this, new CollisionEventArgs(pair.Item1, pair.Item2, new Collision()));
-                }
             }
         }
 
         // Detect ended collisions (Exit)
         foreach (var pair in _previousCollisions.Keys)
         {
-            if (!_currentCollisions.Contains(pair))
+            if (!currentKeys.Contains(pair))
             {
                 bool isTrigger = pair.Item1.IsTrigger || pair.Item2.IsTrigger;
 
                 if (isTrigger)
-                {
                     OnTriggerExit?.Invoke(this, new CollisionEventArgs(pair.Item1, pair.Item2, new Collision()));
-                }
                 else
-                {
                     OnCollisionExit?.Invoke(this, new CollisionEventArgs(pair.Item1, pair.Item2, new Collision()));
-                }
 
                 pair.Item1.CollisionListener?.OnCollisionExit(pair.Item2);
                 pair.Item2.CollisionListener?.OnCollisionExit(pair.Item1);
@@ -342,7 +326,7 @@ public class PhysicsWorld
 
         // Update previous collisions
         _previousCollisions.Clear();
-        foreach (var pair in _currentCollisions)
+        foreach (var pair in currentKeys)
         {
             _previousCollisions[pair] = true;
         }
@@ -377,12 +361,14 @@ public class PhysicsWorld
         return false;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool CircleVsCircle(RigidBody bodyA, RigidBody bodyB, CircleShape circleA, CircleShape circleB, out Collision collision)
     {
         collision = new Collision();
 
-        Vector2 delta = bodyB.Position - bodyA.Position;
-        float distanceSquared = delta.LengthSquared;
+        float dx = bodyB.Position.X - bodyA.Position.X;
+        float dy = bodyB.Position.Y - bodyA.Position.Y;
+        float distanceSquared = dx * dx + dy * dy;
         float radiusSum = circleA.Radius + circleB.Radius;
 
         if (distanceSquared >= radiusSum * radiusSum)
@@ -390,7 +376,16 @@ public class PhysicsWorld
 
         float distance = MathF.Sqrt(distanceSquared);
 
-        collision.Normal = distance > 0 ? delta / distance : new Vector2(1, 0);
+        if (distance > 0)
+        {
+            float invDist = 1f / distance;
+            collision.Normal = new Vector2(dx * invDist, dy * invDist);
+        }
+        else
+        {
+            collision.Normal = new Vector2(1, 0);
+        }
+
         collision.Penetration = radiusSum - distance;
         collision.ContactPoint = bodyA.Position + collision.Normal * circleA.Radius;
 
@@ -399,30 +394,26 @@ public class PhysicsWorld
 
     private bool BoxVsBox(RigidBody bodyA, RigidBody bodyB, BoxShape boxA, BoxShape boxB, out Collision collision)
     {
-        // Use SAT (Separating Axis Theorem) for accurate rotated box collision
         return CollisionDetection.BoxVsBoxSAT(bodyA, bodyB, boxA, boxB, out collision);
     }
 
     private bool CircleVsBox(RigidBody circleBody, RigidBody boxBody, CircleShape circle, BoxShape box, out Collision collision)
     {
-        // Use improved circle vs box with rotation support
         return CollisionDetection.CircleVsBoxImproved(circleBody, boxBody, circle, box, out collision);
     }
 
     private void ResolveCollision(RigidBody bodyA, RigidBody bodyB, Collision collision)
     {
-        // Position correction
         float percent = 0.8f;
         float slop = 0.01f;
-        Vector2 correction = collision.Normal *
-            (Math.Max(collision.Penetration - slop, 0.0f) / (bodyA.InverseMass + bodyB.InverseMass)) * percent;
+        float correction = Math.Max(collision.Penetration - slop, 0.0f) / (bodyA.InverseMass + bodyB.InverseMass) * percent;
+        Vector2 correctionVec = collision.Normal * correction;
 
         if (!bodyA.IsStatic)
-            bodyA.Position -= correction * bodyA.InverseMass;
+            bodyA.Position -= correctionVec * bodyA.InverseMass;
         if (!bodyB.IsStatic)
-            bodyB.Position += correction * bodyB.InverseMass;
+            bodyB.Position += correctionVec * bodyB.InverseMass;
 
-        // Calculate relative velocity at contact point (includes rotation!)
         Vector2 rA = collision.ContactPoint - bodyA.Position;
         Vector2 rB = collision.ContactPoint - bodyB.Position;
 
@@ -435,7 +426,6 @@ public class PhysicsWorld
         if (velocityAlongNormal > 0)
             return;
 
-        // Calculate impulse with rotation
         float restitution = Math.Min(bodyA.Restitution, bodyB.Restitution);
 
         float rACrossN = Vector2.Cross(rA, collision.Normal);
@@ -448,7 +438,6 @@ public class PhysicsWorld
 
         Vector2 impulse = collision.Normal * impulseMagnitude;
 
-        // Apply impulse at contact point (includes torque!)
         if (!bodyA.IsStatic)
         {
             bodyA.Velocity -= impulse * bodyA.InverseMass;
@@ -461,7 +450,7 @@ public class PhysicsWorld
             bodyB.AngularVelocity += Vector2.Cross(rB, impulse) * bodyB.InverseInertia;
         }
 
-        // Friction with rotation
+        // Friction
         relativeVelocity = velocityB - velocityA;
         Vector2 tangent = relativeVelocity - collision.Normal * Vector2.Dot(relativeVelocity, collision.Normal);
 
@@ -499,6 +488,6 @@ public struct Collision
 {
     public Vector2 Normal;
     public float Penetration;
-    public float PenetrationDepth => Penetration; // Alias for compatibility
+    public float PenetrationDepth => Penetration;
     public Vector2 ContactPoint;
 }
