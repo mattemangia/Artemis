@@ -78,6 +78,7 @@ class Program
 
         // Track collision events
         List<(ParticleCollisionEvent evt, double timestamp)> recentCollisions = new();
+        System.Collections.Concurrent.ConcurrentQueue<Particle> pendingParticles = new();
 
         world.CollisionBegin += (sender, e) =>
         {
@@ -87,12 +88,19 @@ class Program
                 experiment.RecordCollision(p1, p2, collisionPoint);
 
                 var evt = new ParticleCollisionEvent(p1, p2, collisionPoint, experiment.SimulationTime);
-                recentCollisions.Add((evt, experiment.SimulationTime));
+                lock (recentCollisions)
+                {
+                    recentCollisions.Add((evt, experiment.SimulationTime));
+                }
 
                 // Create collision products (simplified)
                 if (Random.Shared.NextDouble() < 0.3) // 30% chance
                 {
-                    CreateCollisionProducts(world, collisionPoint, p1, p2);
+                    var newParticles = CreateCollisionProducts(collisionPoint, p1, p2);
+                    foreach (var p in newParticles)
+                    {
+                        pendingParticles.Enqueue(p);
+                    }
                 }
             }
         };
@@ -144,6 +152,11 @@ class Program
 
             // Update physics with time scaling for visibility
             world.Step(DELTA_TIME * TIME_SCALE);
+
+            while (pendingParticles.TryDequeue(out var p))
+            {
+                world.AddBody(p.Body);
+            }
 
             // Update particles
             var allParticles = world.Bodies
@@ -257,8 +270,10 @@ class Program
         }
     }
 
-    static void CreateCollisionProducts(PhysicsWorld2D world, Vector2D point, Particle p1, Particle p2)
+    static List<Particle> CreateCollisionProducts(Vector2D point, Particle p1, Particle p2)
     {
+        var products = new List<Particle>();
+
         // Energy available for product creation
         double availableEnergy = p1.GetKineticEnergy() + p2.GetKineticEnergy();
 
@@ -281,8 +296,10 @@ class Program
                 : ParticleType.Electron;
 
             var product = new Particle(productType, point, direction * speed);
-            world.AddBody(product.Body);
+            products.Add(product);
         }
+
+        return products;
     }
 
     static void ClearExperiment(PhysicsWorld2D world, Accelerator accelerator, CollisionExperiment experiment)
