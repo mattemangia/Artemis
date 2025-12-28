@@ -118,6 +118,9 @@ namespace Artemis.Compute
         /// <summary>Gets the active backend type.</summary>
         public GpuBackend ActiveBackend => _backend?.DeviceInfo?.Backend ?? GpuBackend.CPU;
 
+        /// <summary>Gets or sets the preferred backend (must be set before Initialize).</summary>
+        public GpuBackend PreferredBackend { get; set; } = GpuBackend.Auto;
+
         #endregion
 
         #region Constructors
