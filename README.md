@@ -1748,6 +1748,47 @@ Use Artemis terrain meshes, material presets, and gravity to evaluate slope stab
 landslide behavior. Combine rigid body terrain blocks with particle-based erosion to explore
 failure surfaces, run Monte Carlo parameter sweeps, and visualize runout paths in real time.
 
+```csharp
+using Artemis.Simulation;
+using System.Numerics;
+
+var slope = new SlopeStabilitySystem();
+
+// Provide terrain height + normal for collision and angle calculations
+slope.SetTerrainFunction(
+    heightFunc: pos => 12f - 0.4f * pos.X + 0.1f * MathF.Sin(pos.Z),
+    normalFunc: pos => Vector3.Normalize(new Vector3(0.4f, 1f, 0f))
+);
+
+// Sample slope cells across the hillside
+for (int x = 0; x <= 20; x += 5)
+{
+    var position = new Vector3(x, 0, 0);
+    slope.AddCell(new SlopeCell
+    {
+        Position = position,
+        Height = slope.Gravity.Length() * 0.3f,
+        Mass = 250f,
+        Material = SlopeMaterial.Soil(),
+        Normal = Vector3.Normalize(new Vector3(0.4f, 1f, 0f)),
+        Saturation = 0.2f
+    });
+}
+
+// Analyze stability and trigger collapses
+slope.AnalyzeAllCells();
+foreach (var cell in slope.FindUnstableCells())
+{
+    slope.TriggerCollapse(cell, fragmentCount: 12);
+}
+
+// Step the rockfall simulation
+for (int step = 0; step < 240; step++)
+{
+    slope.Update(deltaTime: 1f / 60f);
+}
+```
+
 ---
 
 ## API Reference
