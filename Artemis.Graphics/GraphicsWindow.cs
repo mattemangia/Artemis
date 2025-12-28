@@ -18,7 +18,7 @@ public abstract class GraphicsWindow : GameWindow
     protected Vector2d CameraPosition { get; set; } = Vector2d.Zero;
     protected double CameraZoom { get; set; } = 20.0;
 
-    private int _shaderProgram;
+    protected int ShaderProgram { get; private set; }
     private int _vao;
     private int _vbo;
 
@@ -117,10 +117,10 @@ public abstract class GraphicsWindow : GameWindow
         GL.ShaderSource(fragmentShader, fragmentShaderSource);
         GL.CompileShader(fragmentShader);
 
-        _shaderProgram = GL.CreateProgram();
-        GL.AttachShader(_shaderProgram, vertexShader);
-        GL.AttachShader(_shaderProgram, fragmentShader);
-        GL.LinkProgram(_shaderProgram);
+        ShaderProgram = GL.CreateProgram();
+        GL.AttachShader(ShaderProgram, vertexShader);
+        GL.AttachShader(ShaderProgram, fragmentShader);
+        GL.LinkProgram(ShaderProgram);
 
         GL.DeleteShader(vertexShader);
         GL.DeleteShader(fragmentShader);
@@ -232,11 +232,11 @@ public abstract class GraphicsWindow : GameWindow
 
         GL.Clear(ClearBufferMask.ColorBufferBit);
 
-        GL.UseProgram(_shaderProgram);
+        GL.UseProgram(ShaderProgram);
 
         // Set projection matrix
         Matrix4 projection = CreateProjectionMatrix();
-        int projectionLoc = GL.GetUniformLocation(_shaderProgram, "projection");
+        int projectionLoc = GL.GetUniformLocation(ShaderProgram, "projection");
         GL.UniformMatrix4(projectionLoc, false, ref projection);
 
         // Render demo content
@@ -276,7 +276,7 @@ public abstract class GraphicsWindow : GameWindow
         GL.DeleteBuffer(_vbo);
         GL.DeleteVertexArray(_circleVao);
         GL.DeleteBuffer(_circleVbo);
-        GL.DeleteProgram(_shaderProgram);
+        GL.DeleteProgram(ShaderProgram);
         base.OnUnload();
     }
 
@@ -284,7 +284,7 @@ public abstract class GraphicsWindow : GameWindow
 
     protected void DrawCircle(Vector2 center, double radius, Color4 color, bool filled = true)
     {
-        int colorLoc = GL.GetUniformLocation(_shaderProgram, "color");
+        int colorLoc = GL.GetUniformLocation(ShaderProgram, "color");
         GL.Uniform4(colorLoc, color);
 
         // Create transformation for the circle
@@ -320,7 +320,7 @@ public abstract class GraphicsWindow : GameWindow
 
     protected void DrawBox(Vector2 center, double width, double height, double rotation, Color4 color, bool filled = true)
     {
-        int colorLoc = GL.GetUniformLocation(_shaderProgram, "color");
+        int colorLoc = GL.GetUniformLocation(ShaderProgram, "color");
         GL.Uniform4(colorLoc, color);
 
         float centerX = (float)center.X;
@@ -367,7 +367,7 @@ public abstract class GraphicsWindow : GameWindow
 
     protected void DrawLine(Vector2 start, Vector2 end, Color4 color, float lineWidth = 1f)
     {
-        int colorLoc = GL.GetUniformLocation(_shaderProgram, "color");
+        int colorLoc = GL.GetUniformLocation(ShaderProgram, "color");
         GL.Uniform4(colorLoc, color);
 
         float[] vertices = new float[]
@@ -393,7 +393,7 @@ public abstract class GraphicsWindow : GameWindow
 
     protected void DrawRing(Vector2 center, double radius, Color4 color, float lineWidth = 2f)
     {
-        int colorLoc = GL.GetUniformLocation(_shaderProgram, "color");
+        int colorLoc = GL.GetUniformLocation(ShaderProgram, "color");
         GL.Uniform4(colorLoc, color);
 
         float[] vertices = new float[CircleSegments * 2];
