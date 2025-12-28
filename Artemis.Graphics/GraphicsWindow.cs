@@ -388,24 +388,8 @@ public abstract class GraphicsWindow : GameWindow
         GL.LineWidth(1f);
     }
 
-    // Vector2D overloads for Physics2D compatibility
-    protected void DrawCircle(Vector2D center, double radius, Color4 color, bool filled = true)
-        => DrawCircle(new Vector2((float)center.X, (float)center.Y), radius, color, filled);
-
-    protected void DrawBox(Vector2D center, double width, double height, double rotation, Color4 color, bool filled = true)
-        => DrawBox(new Vector2((float)center.X, (float)center.Y), width, height, rotation, color, filled);
-
-    protected void DrawLine(Vector2D start, Vector2D end, Color4 color, float lineWidth = 1f)
-        => DrawLine(new Vector2((float)start.X, (float)start.Y), new Vector2((float)end.X, (float)end.Y), color, lineWidth);
-
-    protected void DrawRing(Vector2D center, double radius, Color4 color, float lineWidth = 2f)
-        => DrawRing(new Vector2((float)center.X, (float)center.Y), radius, color, lineWidth);
-
-    protected void DrawWorldText(string text, Vector2D worldPos, Color4 color)
-        => DrawWorldText(text, new Vector2((float)worldPos.X, (float)worldPos.Y), color);
-
-    protected void DrawWorldText(string text, Vector2D worldPos, int fontSize, Color4 color)
-        => DrawWorldText(text, new Vector2((float)worldPos.X, (float)worldPos.Y), fontSize, color);
+    // Helper to convert Vector2D to Vector2
+    protected static Vector2 ToVec2(Vector2D v) => new Vector2((float)v.X, (float)v.Y);
 
     protected void DrawRing(Vector2 center, double radius, Color4 color, float lineWidth = 2f)
     {
