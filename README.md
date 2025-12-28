@@ -45,7 +45,10 @@ A high-performance, multi-threaded physics engine for C# with GPU acceleration, 
 - [Performance Optimization](#performance-optimization)
 - [Advanced 2D Systems](#advanced-2d-systems)
 - [Advanced Topics](#advanced-topics)
+- [Slope Stability](#slope-stability)
 - [API Reference](#api-reference)
+- [Citation](#citation)
+- [Author](#author)
 
 ---
 
@@ -61,6 +64,7 @@ A high-performance, multi-threaded physics engine for C# with GPU acceleration, 
 - **Spatial Hashing** - O(n) broad-phase collision detection
 - **Cloth Simulation** - Real-time deformable cloth with tearing
 - **Destruction & Shattering** - Fracture, shatter events, debris, and erosion
+- **Slope Stability** - Terrain stability workflows for geotechnical-style simulations
 - **Orbital Mechanics & Propulsion** - N-body orbits, Keplerian motion, spacecraft engines
 - **Scientific Accuracy** - Energy tracking, RK4 integration, data export
 
@@ -1738,6 +1742,14 @@ File.WriteAllText("simulation_data.csv", csv);
 
 ---
 
+## Slope Stability
+
+Use Artemis terrain meshes, material presets, and gravity to evaluate slope stability and
+landslide behavior. Combine rigid body terrain blocks with particle-based erosion to explore
+failure surfaces, run Monte Carlo parameter sweeps, and visualize runout paths in real time.
+
+---
+
 ## API Reference
 
 ### Namespaces
@@ -2062,6 +2074,21 @@ Console.WriteLine(particles.GpuBackendInfo);
 ## License
 
 MIT License - See [LICENSE](LICENSE) for details.
+
+---
+
+## Citation
+
+APA-style citation for this project:
+
+> Mangiagalli, M. (2024). *Artemis Physics Engine* [Computer software]. Università degli Studi di Urbino.
+
+---
+
+## Author
+
+- Matteo Mangiagalli — Università degli Studi di Urbino
+- m.mangiagalli@campus.uniurb.it
 
 ---
 
