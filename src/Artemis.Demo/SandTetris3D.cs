@@ -196,48 +196,57 @@ namespace Artemis.Demo
         /// </summary>
         private void GenerateRandomTopography()
         {
-            int numClusters = _random.Next(4, 8);  // 4-7 clusters
+            // Fill the bottom 45% with wavy layers to avoid early victory
+            double fillHeight = TerrariumHeight * 0.45;
+            double spacing = ParticleRadius * 2.1; // Slightly loose packing to allow settling
 
-            for (int i = 0; i < numClusters; i++)
+            // Wave parameters
+            double frequencyX = 0.5;
+            double frequencyZ = 0.8;
+            double amplitude = 1.0;
+            double layerThickness = 2.0; // Height of each color band
+
+            int countX = (int)(TerrariumWidth / spacing);
+            int countY = (int)(fillHeight / spacing);
+            int countZ = (int)(TerrariumDepth / spacing);
+
+            // Center offsets to center the grid
+            double startX = -(countX * spacing) / 2.0 + spacing / 2.0;
+            double startZ = -(countZ * spacing) / 2.0 + spacing / 2.0;
+
+            for (int iy = 0; iy < countY; iy++)
             {
-                uint color = _colors[_random.Next(_colors.Length)];
+                double y = iy * spacing + ParticleRadius;
 
-                // Random position in lower half of terrarium
-                double x = (_random.NextDouble() - 0.5) * (TerrariumWidth - 2);
-                double y = _random.NextDouble() * (TerrariumHeight * 0.3) + 0.5;  // Lower 30%
-                double z = (_random.NextDouble() - 0.5) * (TerrariumDepth - 0.5);
-
-                // Random cluster shape - either horizontal layer or small pile
-                bool isHorizontalLayer = _random.NextDouble() > 0.5;
-
-                if (isHorizontalLayer)
+                for (int ix = 0; ix < countX; ix++)
                 {
-                    // Create a thin horizontal layer (not spanning full width - gaps for connections)
-                    double layerWidth = TerrariumWidth * (0.2 + _random.NextDouble() * 0.3);  // 20-50% width
-                    double layerDepth = TerrariumDepth * 0.8;
-                    double layerHeight = ParticleRadius * (3 + _random.Next(4));
+                    double x = startX + ix * spacing;
 
-                    AddSandLayer(
-                        new Vector3D(x, y, z),
-                        layerWidth, layerHeight, layerDepth,
-                        color
-                    );
-                }
-                else
-                {
-                    // Create a small pile
-                    double pileRadius = 0.4 + _random.NextDouble() * 0.6;
-                    _simulation.AddSandBall(
-                        new Vector3D(x, y + pileRadius, z),
-                        pileRadius,
-                        color,
-                        ParticleRadius
-                    );
+                    for (int iz = 0; iz < countZ; iz++)
+                    {
+                        double z = startZ + iz * spacing;
+
+                        // Calculate wavy coordinate for coloring
+                        // We use the wave to shift the "effective" y coordinate for color lookup
+                        double wavyY = y + amplitude * Math.Sin(x * frequencyX) + amplitude * 0.5 * Math.Cos(z * frequencyZ);
+
+                        // Ensure positive index
+                        int colorIndex = (int)(Math.Abs(wavyY) / layerThickness) % _colors.Length;
+                        uint color = _colors[colorIndex];
+
+                        // Add some randomness to position to prevent perfect stacking artifacts
+                        double jitter = ParticleRadius * 0.1;
+                        double px = x + (_random.NextDouble() - 0.5) * jitter;
+                        double py = y + (_random.NextDouble() - 0.5) * jitter;
+                        double pz = z + (_random.NextDouble() - 0.5) * jitter;
+
+                        _simulation.AddParticle(new Vector3D(px, py, pz), color, ParticleRadius);
+                    }
                 }
             }
 
             // Let the initial topography settle briefly
-            for (int i = 0; i < 10; i++)
+            for (int i = 0; i < 20; i++)
             {
                 _simulation.Update(0.02);
             }
