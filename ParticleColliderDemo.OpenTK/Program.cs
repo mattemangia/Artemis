@@ -436,33 +436,26 @@ public class ParticleColliderWindow : GraphicsWindow
             }
         }
 
-        // Draw particles in 3D with shadows
+        // Draw particles as CERN-style point markers with velocity lines
         foreach (var particle in allParticles)
         {
             Color4 color = ParticleColors.GetValueOrDefault(particle.Properties.Type, Color4.White);
-            float radius = particle.Body.Shape is CircleShape cs ? (float)cs.Radius : 0.15f;
 
-            // Draw shadow on ground
-            var shadowPos = ToCavalier(particle.Body.Position, 0);
-            DrawCircle(shadowPos, radius * 0.8f, new Color4(0f, 0f, 0f, 0.3f), true);
-
-            // Draw particle at ring height
+            // Draw particle position as small point marker
             var particlePos = ToCavalier(particle.Body.Position, RingHeight);
 
-            // Glow effect
-            DrawCircle(particlePos, radius * 2.5f, new Color4(color.R, color.G, color.B, 0.15f), true);
-            DrawCircle(particlePos, radius * 1.5f, new Color4(color.R, color.G, color.B, 0.3f), true);
+            // Small point marker (like CERN event display)
+            DrawCircle(particlePos, 0.12f, color, true);
 
-            // Main particle
-            DrawCircle(particlePos, radius, color, true);
-
-            // Velocity vector
-            if (particle.Body.Velocity.Magnitude > 0.5)
+            // Draw velocity/momentum vector as line
+            double speed = particle.Body.Velocity.Magnitude;
+            if (speed > 0.1)
             {
+                // Line showing direction of movement
                 var velEnd = ToCavalier(
-                    particle.Body.Position + particle.Body.Velocity.Normalized * 2f,
+                    particle.Body.Position + particle.Body.Velocity.Normalized * Math.Min(3.0, speed * 0.3),
                     RingHeight);
-                DrawLine(particlePos, velEnd, new Color4(color.R, color.G, color.B, 0.6f), 1.5f);
+                DrawLine(particlePos, velEnd, color, 1.5f);
             }
         }
 
@@ -642,21 +635,39 @@ public class ParticleColliderWindow : GraphicsWindow
     }
 
     /// <summary>
-    /// Draw particle trail in 3D
+    /// Draw particle trail in 3D - CERN-style curved tracks
     /// </summary>
     private void Draw3DTrail(IList<Vector2D> points, Color4 color)
     {
         if (points.Count < 2) return;
 
+        // Draw main track with fade
         for (int i = 0; i < points.Count - 1; i++)
         {
             float t = (float)i / points.Count;
-            float alpha = t * 0.6f;
-            Color4 trailColor = new Color4(color.R * t, color.G * t, color.B * t, alpha);
+            float alpha = 0.1f + t * 0.7f; // Start faint, get brighter
+            float brightness = 0.3f + t * 0.7f;
+            Color4 trailColor = new Color4(
+                color.R * brightness,
+                color.G * brightness,
+                color.B * brightness,
+                alpha);
 
             var p1 = ToCavalier(points[i], RingHeight);
             var p2 = ToCavalier(points[i + 1], RingHeight);
-            DrawLine(p1, p2, trailColor, 1f);
+            DrawLine(p1, p2, trailColor, 1.5f);
+        }
+
+        // Add glow effect on recent part of trail
+        int glowStart = Math.Max(0, points.Count - 10);
+        for (int i = glowStart; i < points.Count - 1; i++)
+        {
+            float t = (float)(i - glowStart) / 10f;
+            Color4 glowColor = new Color4(color.R, color.G, color.B, 0.1f + t * 0.2f);
+
+            var p1 = ToCavalier(points[i], RingHeight);
+            var p2 = ToCavalier(points[i + 1], RingHeight);
+            DrawLine(p1, p2, glowColor, 3f);
         }
     }
 
@@ -743,10 +754,10 @@ public class ParticleColliderWindow : GraphicsWindow
         float statusY = rpY - panelHeight * 0.45f;
         DrawStatusIndicators(rpX + panelWidth * 0.1f, statusY, panelWidth * 0.8f);
 
-        // === BOTTOM CENTER - Energy Ring Display ===
+        // === BOTTOM CENTER - ATLAS-style Event Display ===
         float ringCenterX = (float)CameraPosition.X;
-        float ringCenterY = bottom + panelMargin + halfHeight * 0.15f;
-        DrawEnergyRingIndicator(ringCenterX, ringCenterY, halfWidth * 0.25f, (float)avgEnergy);
+        float ringCenterY = bottom + panelMargin + halfHeight * 0.2f;
+        DrawATLASEventDisplay(ringCenterX, ringCenterY, halfWidth * 0.22f);
 
         // === TOP CENTER - Time Display ===
         DrawTimeDisplay((float)CameraPosition.X, top - panelMargin * 2, halfWidth * 0.3f);
@@ -929,46 +940,107 @@ public class ParticleColliderWindow : GraphicsWindow
         }
     }
 
-    private void DrawEnergyRingIndicator(float centerX, float centerY, float radius, float energy)
+    /// <summary>
+    /// Draw CERN ATLAS-style event display with momentum/energy histogram
+    /// </summary>
+    private void DrawATLASEventDisplay(float centerX, float centerY, float radius)
     {
         var center = new Vector2D(centerX, centerY);
 
-        // Background ring
-        DrawCircle(center, radius, new Color4(0.08f, 0.1f, 0.15f, 0.8f), true);
-        DrawRing(center, radius, new Color4(0.2f, 0.4f, 0.6f, 0.6f), 2f);
+        // Get particle statistics by angle sector
+        var particles = World.Bodies
+            .Where(b => b.UserData is Particle)
+            .Select(b => (Particle)b.UserData!)
+            .ToList();
 
-        // Energy arc (partial ring based on energy level)
-        float energyPercent = MathF.Min(1f, energy / 1000f);
-        int segments = (int)(32 * energyPercent);
+        // Draw ATLAS-style calorimeter rings
+        int sectors = 24;
+        float[] sectorEnergies = new float[sectors];
 
-        if (segments > 1)
+        // Accumulate energy in each angular sector
+        foreach (var particle in particles)
         {
-            float innerRadius = radius * 0.7f;
-            for (int i = 0; i < segments; i++)
+            var relPos = particle.Body.Position - _accelerator.Center;
+            double angle = Math.Atan2(relPos.Y, relPos.X);
+            if (angle < 0) angle += 2 * Math.PI;
+            int sector = (int)(angle / (2 * Math.PI) * sectors) % sectors;
+            sectorEnergies[sector] += (float)particle.GetKineticEnergy();
+        }
+
+        // Find max energy for normalization
+        float maxEnergy = sectorEnergies.Max();
+        if (maxEnergy < 1) maxEnergy = 1;
+
+        // Draw detector layers (like ATLAS cross-section)
+        float innerRadius = radius * 0.3f;
+        float midRadius = radius * 0.6f;
+        float outerRadius = radius * 0.9f;
+
+        // Inner tracker (blue)
+        DrawRing(center, innerRadius, new Color4(0.1f, 0.3f, 0.6f, 0.6f), 2f);
+
+        // Electromagnetic calorimeter (green)
+        DrawRing(center, midRadius, new Color4(0.1f, 0.5f, 0.2f, 0.5f), 2f);
+
+        // Hadronic calorimeter (yellow)
+        DrawRing(center, outerRadius, new Color4(0.6f, 0.5f, 0.1f, 0.4f), 2f);
+
+        // Draw energy deposits as sector bars (histogram style)
+        for (int i = 0; i < sectors; i++)
+        {
+            float angle1 = (float)(2 * Math.PI * i / sectors) - MathF.PI / 2;
+            float angle2 = (float)(2 * Math.PI * (i + 1) / sectors) - MathF.PI / 2;
+            float midAngle = (angle1 + angle2) / 2;
+
+            float energyRatio = sectorEnergies[i] / maxEnergy;
+            if (energyRatio > 0.01f)
             {
-                float angle1 = -MathF.PI / 2 + (2 * MathF.PI * i / 32);
-                float angle2 = -MathF.PI / 2 + (2 * MathF.PI * (i + 1) / 32);
+                // Draw energy bar from inner to proportional outer radius
+                float barLength = innerRadius + (outerRadius - innerRadius) * energyRatio;
 
-                var p1 = center + new Vector2D(MathF.Cos(angle1), MathF.Sin(angle1)) * innerRadius;
-                var p2 = center + new Vector2D(MathF.Cos(angle2), MathF.Sin(angle2)) * innerRadius;
+                var innerPt = center + new Vector2D(MathF.Cos(midAngle), MathF.Sin(midAngle)) * innerRadius;
+                var outerPt = center + new Vector2D(MathF.Cos(midAngle), MathF.Sin(midAngle)) * barLength;
 
-                float t = (float)i / segments;
-                Color4 arcColor = new Color4(0.2f + t * 0.8f, 1f - t * 0.4f, 0.3f, 0.9f);
-                DrawLine(p1, p2, arcColor, 3f);
+                // Color based on energy (blue->green->yellow->red)
+                Color4 barColor;
+                if (energyRatio < 0.25f)
+                    barColor = new Color4(0.2f, 0.4f, 1f, 0.8f);
+                else if (energyRatio < 0.5f)
+                    barColor = new Color4(0.2f, 0.8f, 0.4f, 0.8f);
+                else if (energyRatio < 0.75f)
+                    barColor = new Color4(0.9f, 0.8f, 0.2f, 0.8f);
+                else
+                    barColor = new Color4(1f, 0.3f, 0.2f, 0.9f);
+
+                DrawLine(innerPt, outerPt, barColor, 3f);
             }
         }
 
-        // Center dot
-        DrawCircle(center, radius * 0.15f, new Color4(0.3f, 0.8f, 1f, 0.8f), true);
-
-        // Energy value indicator dots around the ring
-        for (int i = 0; i < 8; i++)
+        // Draw particle tracks through the detector (curved lines)
+        foreach (var particle in particles.Take(20)) // Limit to prevent clutter
         {
-            float angle = -MathF.PI / 2 + (2 * MathF.PI * i / 8);
-            var dotPos = center + new Vector2D(MathF.Cos(angle), MathF.Sin(angle)) * (radius * 0.9f);
-            bool lit = (i / 8f) < energyPercent;
-            DrawCircle(dotPos, radius * 0.06f, lit ? new Color4(0.3f, 1f, 0.5f, 0.9f) : new Color4(0.2f, 0.2f, 0.25f, 0.5f), true);
+            var relPos = particle.Body.Position - _accelerator.Center;
+            double dist = relPos.Magnitude;
+
+            // Only draw if particle is near the accelerator
+            if (dist < _accelerator.Radius * 1.5)
+            {
+                double angle = Math.Atan2(relPos.Y, relPos.X);
+
+                // Draw track from center to particle position
+                var trackEnd = center + new Vector2D(MathF.Cos((float)angle), MathF.Sin((float)angle)) *
+                               (float)(innerRadius + (outerRadius - innerRadius) * Math.Min(1, dist / _accelerator.Radius));
+
+                Color4 trackColor = ParticleColors.GetValueOrDefault(particle.Properties.Type, Color4.White);
+                trackColor = new Color4(trackColor.R, trackColor.G, trackColor.B, 0.4f);
+
+                DrawLine(center, trackEnd, trackColor, 1f);
+            }
         }
+
+        // Center interaction point marker
+        DrawCircle(center, radius * 0.08f, new Color4(1f, 0.2f, 0.2f, 0.9f), true);
+        DrawCircle(center, radius * 0.12f, new Color4(1f, 0.4f, 0.4f, 0.4f), false);
     }
 
     private void DrawTimeDisplay(float centerX, float y, float width)

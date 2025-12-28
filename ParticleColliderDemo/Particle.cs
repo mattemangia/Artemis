@@ -32,6 +32,8 @@ public class Particle
     public Particle(ParticleType type, Vector2D position, Vector2D velocity)
     {
         _particle = new Particle2D(type, position, velocity);
+        // Override UserData to point to this wrapper instead of the underlying Particle2D
+        _particle.Body.UserData = this;
     }
 
     public void Update(double deltaTime)
