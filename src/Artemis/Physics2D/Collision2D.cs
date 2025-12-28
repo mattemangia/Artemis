@@ -245,6 +245,8 @@ namespace Artemis.Physics2D
 
             double minOverlap = double.MaxValue;
             Vector2D minAxis = Vector2D.Zero;
+            int bestAxisIndex = 0;
+            int currentAxisIndex = 0;
 
             foreach (var axis in axes)
             {
@@ -259,7 +261,9 @@ namespace Artemis.Physics2D
                 {
                     minOverlap = overlap;
                     minAxis = axis;
+                    bestAxisIndex = currentAxisIndex;
                 }
+                currentAxisIndex++;
             }
 
             // Ensure normal points from A to B
@@ -268,7 +272,7 @@ namespace Artemis.Physics2D
                 minAxis = -minAxis;
 
             // Find contact points
-            FindBoxContactPoints(verticesA, verticesB, minAxis, manifold);
+            FindBoxContactPoints(verticesA, verticesB, minAxis, manifold, bestAxisIndex);
 
             manifold.BodyA = a;
             manifold.BodyB = b;
@@ -300,18 +304,32 @@ namespace Artemis.Physics2D
         }
 
         private static void FindBoxContactPoints(Vector2D[] verticesA, Vector2D[] verticesB,
-            Vector2D normal, Manifold2D manifold)
+            Vector2D normal, Manifold2D manifold, int bestAxisIndex)
         {
-            // Find the most penetrating vertex from each polygon
-            int supportA = FindSupportPoint(verticesA, -normal);
-            int supportB = FindSupportPoint(verticesB, normal);
-
-            // Simple contact: use support points
-            manifold.ContactCount = 1;
-            manifold.Contacts[0] = new Contact2D
+            // Axes 0-1 are from A, 2-3 are from B
+            if (bestAxisIndex < 2)
             {
-                Point = (verticesA[supportA] + verticesB[supportB]) * 0.5
-            };
+                // Reference face on A, Incident face on B
+                // Find support point on B (deepest in A's direction, i.e., against normal)
+                // Note: Normal points A -> B. So we want point on B furthest in -Normal direction.
+                int supportB = FindSupportPoint(verticesB, -normal);
+                manifold.ContactCount = 1;
+                manifold.Contacts[0] = new Contact2D
+                {
+                    Point = verticesB[supportB]
+                };
+            }
+            else
+            {
+                // Reference face on B, Incident face on A
+                // Find support point on A (deepest in B's direction, i.e., along normal)
+                int supportA = FindSupportPoint(verticesA, normal);
+                manifold.ContactCount = 1;
+                manifold.Contacts[0] = new Contact2D
+                {
+                    Point = verticesA[supportA]
+                };
+            }
         }
 
         private static int FindSupportPoint(Vector2D[] vertices, Vector2D direction)
@@ -357,6 +375,7 @@ namespace Artemis.Physics2D
             // Test all axes from both polygons
             double minOverlap = double.MaxValue;
             Vector2D minAxis = Vector2D.Zero;
+            bool minAxisFromA = true;
 
             // Test axes from polygon A
             for (int i = 0; i < polyA.VertexCount; i++)
@@ -373,6 +392,7 @@ namespace Artemis.Physics2D
                 {
                     minOverlap = overlap;
                     minAxis = axis;
+                    minAxisFromA = true;
                 }
             }
 
@@ -391,6 +411,7 @@ namespace Artemis.Physics2D
                 {
                     minOverlap = overlap;
                     minAxis = axis;
+                    minAxisFromA = false;
                 }
             }
 
@@ -399,18 +420,32 @@ namespace Artemis.Physics2D
             if (Vector2D.Dot(centerDiff, minAxis) < 0)
                 minAxis = -minAxis;
 
-            // Find contact point (simplified: use support point)
-            int supportB = FindSupportPoint(verticesB, -minAxis);
-
             manifold.BodyA = a;
             manifold.BodyB = b;
             manifold.ContactCount = 1;
-            manifold.Contacts[0] = new Contact2D
+
+            if (minAxisFromA)
             {
-                Point = verticesB[supportB],
-                Normal = minAxis,
-                Depth = minOverlap
-            };
+                // A provides normal. B is Incident.
+                int supportB = FindSupportPoint(verticesB, -minAxis);
+                manifold.Contacts[0] = new Contact2D
+                {
+                    Point = verticesB[supportB],
+                    Normal = minAxis,
+                    Depth = minOverlap
+                };
+            }
+            else
+            {
+                // B provides normal. A is Incident.
+                int supportA = FindSupportPoint(verticesA, minAxis);
+                manifold.Contacts[0] = new Contact2D
+                {
+                    Point = verticesA[supportA],
+                    Normal = minAxis,
+                    Depth = minOverlap
+                };
+            }
 
             return true;
         }
