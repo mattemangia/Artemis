@@ -200,8 +200,8 @@ public class ParticleColliderWindow : GraphicsWindow
 
     private void InjectInitialBeams()
     {
+        // Inject only Beam 1 initially
         _accelerator.InjectBeam1(ParticleType.Proton, 1);
-        _accelerator.InjectBeam2(ParticleType.Proton, 1);
 
         foreach (var particle in _accelerator.GetAllParticles())
         {
@@ -211,10 +211,26 @@ public class ParticleColliderWindow : GraphicsWindow
 
     private void InjectBeams()
     {
+        // Inject Beam 2 (The "other particles to collide with")
+        // Triggered by Space key
+        _accelerator.InjectBeam2(ParticleType.Proton, 1);
+
+        // Add only the newly added particles from Beam 2 to the world
+        foreach (var particle in _accelerator.Beam2.TakeLast(1))
+        {
+            World.AddBody(particle.Body);
+        }
+    }
+
+    private void InjectRandomBeam()
+    {
+        // Restore the "light blue fast particle" (Random high energy type)
+        // Triggered by 'B' key
         ParticleType[] types = { ParticleType.Proton, ParticleType.Electron, ParticleType.Positron };
         var type1 = types[Random.Shared.Next(types.Length)];
         var type2 = types[Random.Shared.Next(types.Length)];
 
+        // Inject into both beams to create chaos
         _accelerator.InjectBeam1(type1, 1);
         _accelerator.InjectBeam2(type2, 1);
 
@@ -367,6 +383,15 @@ public class ParticleColliderWindow : GraphicsWindow
             lock (_deferredActions)
             {
                 _deferredActions.Add(InjectBeams);
+            }
+        }
+
+        // Inject random beam (restored feature)
+        if (KeyboardState.IsKeyPressed(Keys.B))
+        {
+            lock (_deferredActions)
+            {
+                _deferredActions.Add(InjectRandomBeam);
             }
         }
 
@@ -788,6 +813,10 @@ public class ParticleColliderWindow : GraphicsWindow
 
     protected override void DrawUI()
     {
+        // Disable Depth Test and Culling to ensure UI draws on top and isn't culled by winding order
+        GL.Disable(EnableCap.DepthTest);
+        GL.Disable(EnableCap.CullFace);
+
         int uiHeight = (int)(Size.Y * 0.25f);
         // Use full viewport (0,0,W,H) so TextRenderer (which uses Window coordinates) works correctly
         GL.Viewport(0, 0, Size.X, Size.Y);
