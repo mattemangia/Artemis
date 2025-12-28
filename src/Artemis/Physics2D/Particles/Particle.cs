@@ -178,8 +178,8 @@ namespace Artemis.Physics2D.Particles
             Id = Interlocked.Increment(ref _nextId);
             Properties = ParticleProperties.Create(type);
 
-            // Create physics body (very small particles)
-            double visualRadius = Math.Max(0.1, Properties.Mass * 0.15);
+            // Create physics body with small radius for realistic particle appearance
+            double visualRadius = Math.Max(0.15, Properties.Mass * 0.2);
             Body = RigidBody2D.CreateCircle(position, visualRadius, Properties.Mass / (Math.PI * visualRadius * visualRadius));
             Body.Velocity = velocity;
             Body.Material = new Materials.PhysicsMaterial { Restitution = 1.0, Friction = 0.0 }; // Elastic, no friction
