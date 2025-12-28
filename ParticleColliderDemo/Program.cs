@@ -21,8 +21,8 @@ class Program
         Console.WriteLine("  • SIMD-optimized integration");
         Console.WriteLine("  • Data export for scientific analysis");
         Console.WriteLine();
-        Console.WriteLine("Press any key to start the simulation...");
-        Console.ReadKey(true);
+        Console.WriteLine("Starting simulation in 3 seconds...");
+        Thread.Sleep(3000);
 
         RunSimulation();
     }
@@ -150,6 +150,9 @@ class Program
                 .Where(b => b.UserData is Particle)
                 .Select(b => (Particle)b.UserData!)
                 .ToList();
+
+            // Update accelerator physics (acceleration + B-field)
+            accelerator.Update(DELTA_TIME);
 
             foreach (var particle in allParticles)
             {

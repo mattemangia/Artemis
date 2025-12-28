@@ -91,6 +91,42 @@ public class Accelerator
         }
     }
 
+    public void Update(double deltaTime)
+    {
+        // 1. Apply RF Acceleration
+        _accelerator.ApplyRFAccelerationParallel(deltaTime);
+
+        // 2. Adjust Magnetic Field Strength (Synchrotron principle)
+        // B = p / (q * r)  where p is momentum
+        // Force F = qvB = mv^2/r -> B = mv/qr = p/qr
+
+        // We calculate required B for the average energy/momentum of the beam
+        var (b1, b2, avgE) = GetStatistics();
+        if (avgE > 0)
+        {
+            // Approximate average speed/momentum
+            // For simplicity, let's just scale B with Energy roughly or use a strong enough force
+            // F_centripetal = m * v^2 / r
+            // Kinetic Energy K = 0.5 * m * v^2 -> v^2 = 2K/m
+            // F = m * (2K/m) / r = 2K / r
+
+            // So we need a force of magnitude 2K/r pointing to center.
+            // The RadialForceEffector applies a force.
+            // We set its strength to -2K/r (negative for attraction)
+
+            double requiredForce = -(2.0 * avgE) / Radius;
+
+            // Add a safety factor to keep them tight
+            requiredForce *= 1.2;
+
+            // Limit to max reasonable force to prevent numerical explosion
+             if (Math.Abs(requiredForce) > 10000) requiredForce = -10000;
+             if (Math.Abs(requiredForce) < 50) requiredForce = -50;
+
+            _accelerator.SetMagneticFieldStrength(requiredForce);
+        }
+    }
+
     public IEnumerable<Particle> GetAllParticles()
     {
         return Beam1.Concat(Beam2);
