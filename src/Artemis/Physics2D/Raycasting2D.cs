@@ -1,6 +1,9 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
 
 namespace Artemis.Physics2D
 {
@@ -20,6 +23,7 @@ namespace Artemis.Physics2D
             MaxDistance = maxDistance;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public Vector2D GetPoint(double distance)
         {
             return Origin + Direction * distance;
@@ -42,7 +46,8 @@ namespace Artemis.Physics2D
     }
 
     /// <summary>
-    /// Raycasting utilities for 2D physics.
+    /// High-performance raycasting utilities for 2D physics.
+    /// Supports parallel batch raycasting for maximum throughput.
     /// </summary>
     public static class Raycaster2D
     {
@@ -58,6 +63,10 @@ namespace Artemis.Physics2D
             {
                 if (!body.IsActive) continue;
                 if ((body.CategoryBits & layerMask) == 0) continue;
+
+                // Quick AABB check first
+                if (!RayIntersectsAABB(ray, body.AABB, closestDistance))
+                    continue;
 
                 RaycastHit2D hit;
                 bool didHit = false;
@@ -86,6 +95,20 @@ namespace Artemis.Physics2D
 
             closest.Hit = closestDistance < ray.MaxDistance;
             return closest;
+        }
+
+        /// <summary>
+        /// Cast a ray using spatial hash grid for acceleration.
+        /// </summary>
+        public static RaycastHit2D RaycastWithSpatialHash(Ray2D ray, SpatialHashGrid2D grid, ushort layerMask = 0xFFFF)
+        {
+            // Get bodies along ray path
+            Vector2D end = ray.GetPoint(ray.MaxDistance);
+            Vector2D min = new Vector2D(Math.Min(ray.Origin.X, end.X), Math.Min(ray.Origin.Y, end.Y));
+            Vector2D max = new Vector2D(Math.Max(ray.Origin.X, end.X), Math.Max(ray.Origin.Y, end.Y));
+
+            var candidates = grid.QueryRegion(min, max);
+            return Raycast(ray, candidates, layerMask);
         }
 
         /// <summary>
@@ -129,8 +152,106 @@ namespace Artemis.Physics2D
         }
 
         /// <summary>
+        /// Cast multiple rays in parallel (batch raycasting).
+        /// </summary>
+        public static RaycastHit2D[] RaycastBatchParallel(Ray2D[] rays, IList<RigidBody2D> bodies, ushort layerMask = 0xFFFF)
+        {
+            var results = new RaycastHit2D[rays.Length];
+
+            Parallel.For(0, rays.Length, i =>
+            {
+                results[i] = Raycast(rays[i], bodies, layerMask);
+            });
+
+            return results;
+        }
+
+        /// <summary>
+        /// Cast rays in a fan pattern (useful for vision cones, sensors).
+        /// </summary>
+        public static RaycastHit2D[] RaycastFanParallel(
+            Vector2D origin,
+            double startAngle,
+            double endAngle,
+            int rayCount,
+            double maxDistance,
+            IList<RigidBody2D> bodies,
+            ushort layerMask = 0xFFFF)
+        {
+            var rays = new Ray2D[rayCount];
+            double angleStep = (endAngle - startAngle) / (rayCount - 1);
+
+            for (int i = 0; i < rayCount; i++)
+            {
+                double angle = startAngle + i * angleStep;
+                var direction = new Vector2D(Math.Cos(angle), Math.Sin(angle));
+                rays[i] = new Ray2D(origin, direction, maxDistance);
+            }
+
+            return RaycastBatchParallel(rays, bodies, layerMask);
+        }
+
+        /// <summary>
+        /// Cast rays in a circle pattern (360 degree sensor).
+        /// </summary>
+        public static RaycastHit2D[] RaycastCircleParallel(
+            Vector2D origin,
+            int rayCount,
+            double maxDistance,
+            IList<RigidBody2D> bodies,
+            ushort layerMask = 0xFFFF)
+        {
+            return RaycastFanParallel(origin, 0, 2 * Math.PI, rayCount, maxDistance, bodies, layerMask);
+        }
+
+        /// <summary>
+        /// Quick AABB intersection test for ray culling.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool RayIntersectsAABB(Ray2D ray, AABB2D aabb, double maxDist)
+        {
+            double tmin = 0;
+            double tmax = maxDist;
+
+            // X axis
+            if (Math.Abs(ray.Direction.X) < 1e-8)
+            {
+                if (ray.Origin.X < aabb.Min.X || ray.Origin.X > aabb.Max.X)
+                    return false;
+            }
+            else
+            {
+                double t1 = (aabb.Min.X - ray.Origin.X) / ray.Direction.X;
+                double t2 = (aabb.Max.X - ray.Origin.X) / ray.Direction.X;
+                if (t1 > t2) { double tmp = t1; t1 = t2; t2 = tmp; }
+                tmin = Math.Max(tmin, t1);
+                tmax = Math.Min(tmax, t2);
+                if (tmin > tmax) return false;
+            }
+
+            // Y axis
+            if (Math.Abs(ray.Direction.Y) < 1e-8)
+            {
+                if (ray.Origin.Y < aabb.Min.Y || ray.Origin.Y > aabb.Max.Y)
+                    return false;
+            }
+            else
+            {
+                double t1 = (aabb.Min.Y - ray.Origin.Y) / ray.Direction.Y;
+                double t2 = (aabb.Max.Y - ray.Origin.Y) / ray.Direction.Y;
+                if (t1 > t2) { double tmp = t1; t1 = t2; t2 = tmp; }
+                tmin = Math.Max(tmin, t1);
+                tmax = Math.Min(tmax, t2);
+                if (tmin > tmax) return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
         /// Raycast against a circle.
         /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool RaycastCircle(Ray2D ray, Vector2D center, double radius, out RaycastHit2D hit)
         {
             hit = RaycastHit2D.NoHit;
@@ -170,6 +291,7 @@ namespace Artemis.Physics2D
         /// <summary>
         /// Raycast against a box (with rotation support).
         /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool RaycastBox(Ray2D ray, Vector2D center, BoxShape box, double rotation, out RaycastHit2D hit)
         {
             hit = RaycastHit2D.NoHit;
@@ -193,62 +315,57 @@ namespace Artemis.Physics2D
             double halfW = box.HalfWidth;
             double halfH = box.HalfHeight;
 
-            Vector2D min = new Vector2D(-halfW, -halfH);
-            Vector2D max = new Vector2D(halfW, halfH);
-
             double tMin = 0;
             double tMax = ray.MaxDistance;
             int hitAxis = -1;
+            bool hitMin = true;
 
-            for (int i = 0; i < 2; i++)
+            // X axis
+            if (Math.Abs(rotatedDirection.X) < 1e-8)
             {
-                double origin = i == 0 ? rotatedOrigin.X : rotatedOrigin.Y;
-                double dir = i == 0 ? rotatedDirection.X : rotatedDirection.Y;
-                double minVal = i == 0 ? min.X : min.Y;
-                double maxVal = i == 0 ? max.X : max.Y;
+                if (rotatedOrigin.X < -halfW || rotatedOrigin.X > halfW)
+                    return false;
+            }
+            else
+            {
+                double t1 = (-halfW - rotatedOrigin.X) / rotatedDirection.X;
+                double t2 = (halfW - rotatedOrigin.X) / rotatedDirection.X;
 
-                if (Math.Abs(dir) < 0.0001)
-                {
-                    if (origin < minVal || origin > maxVal)
-                        return false;
-                }
-                else
-                {
-                    double t1 = (minVal - origin) / dir;
-                    double t2 = (maxVal - origin) / dir;
+                if (t1 > t2) { double tmp = t1; t1 = t2; t2 = tmp; hitMin = false; }
+                else hitMin = true;
 
-                    bool fromMin = t1 < t2;
-                    if (!fromMin)
-                    {
-                        double temp = t1;
-                        t1 = t2;
-                        t2 = temp;
-                    }
+                if (t1 > tMin) { tMin = t1; hitAxis = 0; }
+                tMax = Math.Min(tMax, t2);
 
-                    if (t1 > tMin)
-                    {
-                        tMin = t1;
-                        hitAxis = i;
-                    }
-                    tMax = Math.Min(tMax, t2);
-
-                    if (tMin > tMax)
-                        return false;
-                }
+                if (tMin > tMax) return false;
             }
 
-            Vector2D localPoint = rotatedOrigin + rotatedDirection * tMin;
+            // Y axis
+            if (Math.Abs(rotatedDirection.Y) < 1e-8)
+            {
+                if (rotatedOrigin.Y < -halfH || rotatedOrigin.Y > halfH)
+                    return false;
+            }
+            else
+            {
+                double t1 = (-halfH - rotatedOrigin.Y) / rotatedDirection.Y;
+                double t2 = (halfH - rotatedOrigin.Y) / rotatedDirection.Y;
+
+                bool fromMin = t1 < t2;
+                if (!fromMin) { double tmp = t1; t1 = t2; t2 = tmp; }
+
+                if (t1 > tMin) { tMin = t1; hitAxis = 1; hitMin = fromMin; }
+                tMax = Math.Min(tMax, t2);
+
+                if (tMin > tMax) return false;
+            }
 
             // Calculate normal in local space
             Vector2D localNormal;
             if (hitAxis == 0)
-            {
-                localNormal = rotatedDirection.X > 0 ? new Vector2D(-1, 0) : new Vector2D(1, 0);
-            }
+                localNormal = hitMin ? new Vector2D(-1, 0) : new Vector2D(1, 0);
             else
-            {
-                localNormal = rotatedDirection.Y > 0 ? new Vector2D(0, -1) : new Vector2D(0, 1);
-            }
+                localNormal = hitMin ? new Vector2D(0, -1) : new Vector2D(0, 1);
 
             // Transform back to world space
             double wcos = Math.Cos(rotation);
@@ -276,6 +393,7 @@ namespace Artemis.Physics2D
         /// <summary>
         /// Raycast against an edge.
         /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool RaycastEdge(Ray2D ray, Vector2D v1, Vector2D v2, out RaycastHit2D hit)
         {
             hit = RaycastHit2D.NoHit;
@@ -285,7 +403,7 @@ namespace Artemis.Physics2D
 
             // Check if ray is parallel to edge
             double denom = Vector2D.Dot(ray.Direction, normal);
-            if (Math.Abs(denom) < 0.0001)
+            if (Math.Abs(denom) < 1e-8)
                 return false;
 
             double t = Vector2D.Dot(v1 - ray.Origin, normal) / denom;
@@ -316,6 +434,70 @@ namespace Artemis.Physics2D
             };
 
             return true;
+        }
+
+        /// <summary>
+        /// Raycast against a polygon.
+        /// </summary>
+        public static bool RaycastPolygon(Ray2D ray, PolygonShape2D polygon, Vector2D position, double rotation, out RaycastHit2D hit)
+        {
+            hit = RaycastHit2D.NoHit;
+
+            var vertices = polygon.GetWorldVertices(position, rotation);
+            double closestT = ray.MaxDistance;
+            bool foundHit = false;
+
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                int next = (i + 1) % vertices.Length;
+                if (RaycastEdge(ray, vertices[i], vertices[next], out var edgeHit))
+                {
+                    if (edgeHit.Distance < closestT)
+                    {
+                        closestT = edgeHit.Distance;
+                        hit = edgeHit;
+                        foundHit = true;
+                    }
+                }
+            }
+
+            return foundHit;
+        }
+    }
+
+    /// <summary>
+    /// Parallel raycast job for batch processing.
+    /// </summary>
+    public class ParallelRaycastJob
+    {
+        private readonly IList<RigidBody2D> _bodies;
+        private readonly ushort _layerMask;
+        private readonly ConcurrentQueue<(Ray2D ray, int index)> _rayQueue;
+        private readonly RaycastHit2D[] _results;
+
+        public ParallelRaycastJob(IList<RigidBody2D> bodies, int rayCount, ushort layerMask = 0xFFFF)
+        {
+            _bodies = bodies;
+            _layerMask = layerMask;
+            _rayQueue = new ConcurrentQueue<(Ray2D, int)>();
+            _results = new RaycastHit2D[rayCount];
+        }
+
+        public void EnqueueRay(Ray2D ray, int index)
+        {
+            _rayQueue.Enqueue((ray, index));
+        }
+
+        public RaycastHit2D[] Execute()
+        {
+            var rays = _rayQueue.ToArray();
+
+            Parallel.ForEach(rays, item =>
+            {
+                _results[item.index] = Raycaster2D.Raycast(item.ray, _bodies, _layerMask);
+            });
+
+            return _results;
         }
     }
 }
