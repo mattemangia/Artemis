@@ -11,6 +11,7 @@ namespace ParticleColliderDemo;
 public class Accelerator
 {
     private readonly Accelerator2D _accelerator;
+    private double _phase = Math.PI / 2; // Start at max acceleration
 
     public Vector2D Center => _accelerator.Center;
     public double Radius => _accelerator.Radius;
@@ -83,18 +84,31 @@ public class Accelerator
         double distanceFromCenter = (particle.Body.Position - Center).Magnitude;
         double deviation = distanceFromCenter - Radius;
 
-        if (Math.Abs(deviation) > 0.1)
+        if (Math.Abs(deviation) > 0.05)
         {
+            // Spring Force (Restoring)
             Vector2D toCenter = (Center - particle.Body.Position).Normalized;
-            Vector2D restoringForce = toCenter * (deviation * 10.0);
-            particle.Body.ApplyForce(restoringForce * deltaTime);
+            double k = 20.0; // Spring constant
+            Vector2D restoringForce = toCenter * (deviation * k);
+
+            // Damping Force (Stabilizing)
+            Vector2D radialDir = (particle.Body.Position - Center).Normalized;
+            double radialVel = Vector2D.Dot(particle.Body.Velocity, radialDir);
+            double c = 5.0; // Damping constant
+            Vector2D dampingForce = radialDir * (-radialVel * c);
+
+            particle.Body.ApplyForce((restoringForce + dampingForce) * deltaTime);
         }
     }
 
     public void Update(double deltaTime)
     {
+        // Cycle phase to simulate RF
+        _phase += deltaTime * 5.0;
+
         // 1. Apply RF Acceleration (increase Energy)
-        _accelerator.ApplyRFAccelerationParallel(deltaTime);
+        // Pass phase to allow modulation
+        _accelerator.ApplyRFAccelerationParallel(deltaTime, _phase);
 
         // 2. Apply Magnetic Field (Lorentz Force) to turn particles
         _accelerator.ApplyMagneticFieldParallel(deltaTime);

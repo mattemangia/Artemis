@@ -200,8 +200,8 @@ public class ParticleColliderWindow : GraphicsWindow
 
     private void InjectInitialBeams()
     {
-        _accelerator.InjectBeam1(ParticleType.Proton, 6);
-        _accelerator.InjectBeam2(ParticleType.Proton, 6);
+        _accelerator.InjectBeam1(ParticleType.Proton, 1);
+        _accelerator.InjectBeam2(ParticleType.Proton, 1);
 
         foreach (var particle in _accelerator.GetAllParticles())
         {
@@ -215,10 +215,10 @@ public class ParticleColliderWindow : GraphicsWindow
         var type1 = types[Random.Shared.Next(types.Length)];
         var type2 = types[Random.Shared.Next(types.Length)];
 
-        _accelerator.InjectBeam1(type1, 4);
-        _accelerator.InjectBeam2(type2, 4);
+        _accelerator.InjectBeam1(type1, 1);
+        _accelerator.InjectBeam2(type2, 1);
 
-        foreach (var particle in _accelerator.Beam1.TakeLast(4).Concat(_accelerator.Beam2.TakeLast(4)))
+        foreach (var particle in _accelerator.Beam1.TakeLast(1).Concat(_accelerator.Beam2.TakeLast(1)))
         {
             World.AddBody(particle.Body);
         }
@@ -226,10 +226,10 @@ public class ParticleColliderWindow : GraphicsWindow
 
     private void InjectSpecificBeam(ParticleType type1, ParticleType type2)
     {
-        _accelerator.InjectBeam1(type1, 5);
-        _accelerator.InjectBeam2(type2, 5);
+        _accelerator.InjectBeam1(type1, 1);
+        _accelerator.InjectBeam2(type2, 1);
 
-        foreach (var particle in _accelerator.Beam1.TakeLast(5).Concat(_accelerator.Beam2.TakeLast(5)))
+        foreach (var particle in _accelerator.Beam1.TakeLast(1).Concat(_accelerator.Beam2.TakeLast(1)))
         {
             World.AddBody(particle.Body);
         }
@@ -498,6 +498,8 @@ public class ParticleColliderWindow : GraphicsWindow
         int viewHeight = Size.Y - uiHeight;
 
         // === VIEWPORT 1: 3D Scene ===
+        // Note: Viewport origin (0,0) is bottom-left in OpenGL
+        // So we draw scene from y=uiHeight to y=Size.Y
         GL.Viewport(0, uiHeight, Size.X, viewHeight);
 
         float aspect = (float)Size.X / viewHeight;
@@ -787,31 +789,31 @@ public class ParticleColliderWindow : GraphicsWindow
     protected override void DrawUI()
     {
         int uiHeight = (int)(Size.Y * 0.25f);
-        GL.Viewport(0, 0, Size.X, uiHeight);
+        // Use full viewport (0,0,W,H) so TextRenderer (which uses Window coordinates) works correctly
+        GL.Viewport(0, 0, Size.X, Size.Y);
 
-        // Orthographic projection for UI matching Window Coordinates for Y
-        // Viewport is at bottom (0..uiHeight).
-        // We want Y=Size.Y (bottom) -> -1 (GL bottom)
-        // We want Y=Size.Y - uiHeight (top of panel) -> +1 (GL top)
-        // Matrix4.CreateOrthographicOffCenter(left, right, bottom, top, zNear, zFar)
-        // Map [0, Width] x [Size.Y, Size.Y - uiHeight] to [-1, 1]
-        // Note: bottom > top in Y arguments flips the axis, which matches standard window coords (Y down)
-        Matrix4 uiProjection = Matrix4.CreateOrthographicOffCenter(0, Size.X, Size.Y, Size.Y - uiHeight, -1f, 1f);
+        // Orthographic projection for UI matching Window Coordinates (0 at Top-Left)
+        // Top=0, Bottom=Size.Y
+        // Map 0 -> -1 (Top) ... Wait.
+        // Standard Window Coords: 0 is Top.
+        // OpenGL NDCs: +1 is Top.
+        // So we want Map(0) = 1, Map(Size.Y) = -1.
+        // CreateOrthographicOffCenter(left, right, bottom, top, ...)
+        // If bottom > top, it flips.
+        // bottom = Size.Y, top = 0.
+        Matrix4 uiProjection = Matrix4.CreateOrthographicOffCenter(0, Size.X, Size.Y, 0, -1f, 1f);
 
         // Use a clean shader for UI
         int projectionLoc = GL.GetUniformLocation(ShaderProgram, "projection");
         GL.UniformMatrix4(projectionLoc, false, ref uiProjection);
 
-        // Draw background for UI panel (Standard CERN Grey/Black)
-        // Coordinates must be in [Size.Y - uiHeight, Size.Y] range now
+        // Draw background for UI panel
+        // It sits at the bottom: From (Size.Y - uiHeight) to Size.Y
         float midY = Size.Y - uiHeight / 2.0f;
         DrawBox(new Vector2D(Size.X/2, midY), Size.X, uiHeight, 0, new Color4(0.85f, 0.85f, 0.85f, 1f), true); // Grey bg
         DrawBox(new Vector2D(Size.X/2, midY), Size.X - 4, uiHeight - 4, 0, new Color4(0f, 0f, 0f, 1f), true);   // Black inner
 
         DrawCERNInterface(uiHeight);
-
-        // Restore viewport
-        GL.Viewport(0, 0, Size.X, Size.Y);
 
         // Set title
          var (b1, b2, avgE) = _accelerator.GetStatistics();
@@ -828,7 +830,6 @@ public class ParticleColliderWindow : GraphicsWindow
         float w = width - 2 * margin;
         float h = height - 2 * margin;
         float startX = margin;
-        float startY = margin;
 
         // Coordinates: Window Coordinates (0 at Top)
         // Panel starts at Size.Y - height
@@ -890,11 +891,6 @@ public class ParticleColliderWindow : GraphicsWindow
         DrawScreenText("Collisions in IP1, IP2, IP5, IP8. Lumis optimization.", startX, Size.Y - 20, 12, new Color4(0.5f, 1f, 0.5f, 1f));
 
         // Event display overlay (small, center)
-        // DrawATLASEventDisplay(width/2, graphY, height * 0.5f); // Overlapping graphs, maybe remove or scale down
-        // Let's put it very small in the center status box or just omit if it clutters.
-        // Or put it between graphs if space permits.
-        // Space between graphs: Center +/- margin.
-        // Let's put it at the very bottom center.
         float eventDisplayY = panelTop + height - height*0.15f;
         DrawATLASEventDisplay(width/2, eventDisplayY, height * 0.25f);
     }
@@ -905,7 +901,7 @@ public class ParticleColliderWindow : GraphicsWindow
 
         float xStep = w / MaxHistory;
         float startX = (float)center.X - w/2;
-        float bottomY = (float)center.Y - h/2;
+        float bottomY = (float)center.Y + h/2; // Inverted Y for screen coords: Bottom is Larger Y
 
         float maxVal = history.Max();
         if (maxVal < 1) maxVal = 1;
@@ -918,8 +914,10 @@ public class ParticleColliderWindow : GraphicsWindow
             float x1 = startX + i * xStep;
             float x2 = startX + (i+1) * xStep;
 
-            float y1 = bottomY + (val1 / maxVal) * h * 0.9f;
-            float y2 = bottomY + (val2 / maxVal) * h * 0.9f;
+            // Screen coords: Higher Y is lower on screen
+            // Value should go UP (Decrease Y)
+            float y1 = bottomY - (val1 / maxVal) * h * 0.9f;
+            float y2 = bottomY - (val2 / maxVal) * h * 0.9f;
 
             DrawLine(new Vector2D(x1, y1), new Vector2D(x2, y2), color, 1.5f);
         }
