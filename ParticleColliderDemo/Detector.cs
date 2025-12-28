@@ -1,162 +1,54 @@
-using ArtemisEngine;
+using Artemis.Physics2D;
+using Artemis.Physics2D.Particles;
 
 namespace ParticleColliderDemo;
 
 /// <summary>
-/// Types of detectors in a particle collider (based on LHC)
-/// </summary>
-public enum DetectorType
-{
-    Tracker,           // Tracks particle paths
-    Calorimeter,       // Measures energy
-    MuonChamber,       // Detects muons
-    InteractionPoint   // Where collisions happen
-}
-
-/// <summary>
-/// Detector that records particles passing through
-/// Similar to ATLAS or CMS detectors at LHC
+/// Console-friendly wrapper around Detector2D.
 /// </summary>
 public class Detector
 {
-    public DetectorType Type { get; set; }
-    public string Name { get; set; }
-    public Vector2 Position { get; set; }
-    public float Radius { get; set; }
-    public ConsoleColor Color { get; set; }
-    public RigidBody TriggerZone { get; set; }
+    private readonly Detector2D _detector;
 
-    // Detection data
-    public List<ParticleDetection> Detections { get; private set; } = new();
-    public float TotalEnergyDetected { get; private set; } = 0;
-    public int ParticleCount { get; private set; } = 0;
+    public DetectorType2D Type => _detector.Type;
+    public string Name => _detector.Name;
+    public Vector2D Position => _detector.Position;
+    public double Radius => _detector.Radius;
+    public ConsoleColor Color => Type.GetConsoleColor();
+    public RigidBody2D? TriggerZone => _detector.TriggerZone;
 
-    public Detector(DetectorType type, string name, Vector2 position, float radius)
+    public double TotalEnergyDetected => _detector.TotalEnergyDetected;
+    public int ParticleCount => _detector.ParticleCount;
+
+    public Detector(DetectorType2D type, string name, Vector2D position, double radius)
     {
-        Type = type;
-        Name = name;
-        Position = position;
-        Radius = radius;
-
-        Color = type switch
-        {
-            DetectorType.Tracker => ConsoleColor.Cyan,
-            DetectorType.Calorimeter => ConsoleColor.Yellow,
-            DetectorType.MuonChamber => ConsoleColor.Magenta,
-            DetectorType.InteractionPoint => ConsoleColor.Red,
-            _ => ConsoleColor.White
-        };
-
-        // Create trigger zone (no physics, just detection)
-        TriggerZone = new RigidBody(position, 0, new CircleShape(radius));
-        TriggerZone.IsStatic = true;
-        TriggerZone.IsTrigger = true;
-        TriggerZone.UserData = this;
+        _detector = new Detector2D(type, name, position, radius);
     }
 
-    public void RecordDetection(Particle particle, float simulationTime)
+    public void RecordDetection(Particle particle, double simulationTime)
     {
-        var detection = new ParticleDetection
-        {
-            Time = simulationTime,
-            ParticleType = particle.Properties.Type,
-            Position = particle.Body.Position,
-            Velocity = particle.Body.Velocity,
-            Energy = particle.GetKineticEnergy(),
-            Momentum = particle.GetMomentum(),
-            Charge = particle.Properties.Charge
-        };
-
-        Detections.Add(detection);
-        TotalEnergyDetected += detection.Energy;
-        ParticleCount++;
+        // Create a temporary Particle2D for detection (the wrapper's inner particle)
+        // This is a bit of a workaround for the adapter pattern
+        var p2d = new Particle2D(particle.Properties.Type, particle.Body.Position, particle.Body.Velocity);
+        _detector.RecordDetection(p2d, simulationTime);
     }
 
     public void Clear()
     {
-        Detections.Clear();
-        TotalEnergyDetected = 0;
-        ParticleCount = 0;
+        _detector.Clear();
     }
 
     public string GetSummary()
     {
-        if (ParticleCount == 0)
-            return $"{Name}: No detections";
-
-        return $"{Name}: {ParticleCount} particles, {TotalEnergyDetected:F1} GeV";
+        return _detector.GetSummary();
     }
 }
 
-/// <summary>
-/// Record of a particle detection
-/// </summary>
-public class ParticleDetection
+// Re-export enums for convenience
+public enum DetectorType
 {
-    public float Time { get; set; }
-    public ParticleType ParticleType { get; set; }
-    public Vector2 Position { get; set; }
-    public Vector2 Velocity { get; set; }
-    public float Energy { get; set; }
-    public float Momentum { get; set; }
-    public int Charge { get; set; }
-}
-
-/// <summary>
-/// Collision event between particles
-/// Represents a high-energy collision like those at the LHC
-/// </summary>
-public class ParticleCollisionEvent
-{
-    public float Time { get; set; }
-    public Particle Particle1 { get; set; }
-    public Particle Particle2 { get; set; }
-    public Vector2 CollisionPoint { get; set; }
-    public float TotalEnergyBefore { get; set; }
-    public float TotalEnergyAfter { get; set; }
-    public float CenterOfMassEnergy { get; set; }
-    public List<Particle> Products { get; set; } = new();
-
-    public ParticleCollisionEvent(Particle p1, Particle p2, Vector2 point, float time)
-    {
-        Time = time;
-        Particle1 = p1;
-        Particle2 = p2;
-        CollisionPoint = point;
-
-        // Calculate center-of-mass energy (like √s at LHC)
-        float e1 = p1.GetKineticEnergy();
-        float e2 = p2.GetKineticEnergy();
-        TotalEnergyBefore = e1 + e2;
-
-        // Simplified COM energy calculation
-        CenterOfMassEnergy = MathF.Sqrt(2 * p1.Properties.Mass * p2.Properties.Mass +
-                                        2 * e1 * e2);
-    }
-
-    public void AnalyzeProducts(List<Particle> allParticles)
-    {
-        // Find particles created near collision point recently
-        foreach (var p in allParticles)
-        {
-            if ((p.Body.Position - CollisionPoint).Length < 2.0f &&
-                p.Age < 0.1f &&
-                p != Particle1 && p != Particle2)
-            {
-                Products.Add(p);
-            }
-        }
-
-        TotalEnergyAfter = Products.Sum(p => p.GetKineticEnergy());
-    }
-
-    public string GetSummary()
-    {
-        string p1Type = Particle1.Properties.Symbol;
-        string p2Type = Particle2.Properties.Symbol;
-
-        return $"{p1Type} + {p2Type} → {Products.Count} products, " +
-               $"√s = {CenterOfMassEnergy:F1} GeV, " +
-               $"E_in = {TotalEnergyBefore:F1} GeV";
-    }
+    Tracker = DetectorType2D.Tracker,
+    Calorimeter = DetectorType2D.Calorimeter,
+    MuonChamber = DetectorType2D.MuonChamber,
+    InteractionPoint = DetectorType2D.InteractionPoint
 }

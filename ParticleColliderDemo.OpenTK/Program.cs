@@ -1,5 +1,6 @@
 using Artemis.Graphics;
-using ArtemisEngine;
+using Artemis.Physics2D;
+using Artemis.Physics2D.Particles;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.GraphicsLibraryFramework;
 using ParticleColliderDemo;
@@ -57,27 +58,27 @@ public class ParticleColliderWindow : GraphicsWindow
     /// <summary>
     /// Transform 2D physics coordinates to cavalier 3D projection
     /// </summary>
-    private ArtemisEngine.Vector2 ToCavalier(ArtemisEngine.Vector2 pos, float height = 0)
+    private Vector2D ToCavalier(Vector2D pos, float height = 0)
     {
         // Rotate around view axis
         float cos = MathF.Cos(_viewRotation);
         float sin = MathF.Sin(_viewRotation);
-        float rx = pos.X * cos - pos.Y * sin;
-        float ry = pos.X * sin + pos.Y * cos;
+        double rx = pos.X * cos - pos.Y * sin;
+        double ry = pos.X * sin + pos.Y * cos;
 
         // Apply cavalier projection:
         // X stays as X
         // Y is compressed and offset by depth
-        float projX = rx;
-        float projY = ry * MathF.Cos(CavalierAngle) + height;
+        double projX = rx;
+        double projY = ry * MathF.Cos(CavalierAngle) + height;
 
-        return new ArtemisEngine.Vector2(projX, projY);
+        return new Vector2D(projX, projY);
     }
 
     /// <summary>
     /// Get depth value for sorting (higher Y = further back)
     /// </summary>
-    private float GetDepth(ArtemisEngine.Vector2 pos)
+    private double GetDepth(Vector2D pos)
     {
         float cos = MathF.Cos(_viewRotation);
         float sin = MathF.Sin(_viewRotation);
@@ -87,14 +88,14 @@ public class ParticleColliderWindow : GraphicsWindow
     protected override void Initialize()
     {
         // No gravity in the accelerator (vacuum)
-        World = new PhysicsWorld(new ArtemisEngine.Vector2(0, 0));
-        World.UseAdvancedSolver = true;
+        World = new PhysicsWorld2D(Vector2D.Zero);
+        World.UseCCD = true;
 
         // Create accelerator with smaller energy for slower particles
         _accelerator = new Accelerator(
-            center: new ArtemisEngine.Vector2(0, 0),
-            radius: 15f,
-            beamEnergy: 3f // Lower energy = slower particles
+            center: Vector2D.Zero,
+            radius: 15.0,
+            beamEnergy: 3.0 // Lower energy = slower particles
         );
 
         // Create experiment
@@ -110,7 +111,7 @@ public class ParticleColliderWindow : GraphicsWindow
         }
 
         // Setup collision events
-        World.OnTriggerEnter += (sender, e) =>
+        World.TriggerEnter += (sender, e) =>
         {
             if (e.BodyA.UserData is Detector detector && e.BodyB.UserData is Particle particle)
             {
@@ -122,15 +123,15 @@ public class ParticleColliderWindow : GraphicsWindow
             }
         };
 
-        World.OnCollisionEnter += (sender, e) =>
+        World.CollisionBegin += (sender, e) =>
         {
             if (e.BodyA.UserData is Particle p1 && e.BodyB.UserData is Particle p2)
             {
-                ArtemisEngine.Vector2 collisionPoint = (p1.Body.Position + p2.Body.Position) * 0.5f;
+                Vector2D collisionPoint = (p1.Body.Position + p2.Body.Position) * 0.5;
                 _experiment.RecordCollision(p1, p2, collisionPoint);
 
                 var evt = new ParticleCollisionEvent(p1, p2, collisionPoint, _experiment.SimulationTime);
-                _recentCollisions.Add((evt, _experiment.SimulationTime));
+                _recentCollisions.Add((evt, (float)_experiment.SimulationTime));
 
                 // Create collision products
                 if (Random.Shared.NextSingle() < 0.3f)
@@ -184,35 +185,35 @@ public class ParticleColliderWindow : GraphicsWindow
         }
     }
 
-    private void CreateCollisionProducts(ArtemisEngine.Vector2 point, Particle p1, Particle p2)
+    private void CreateCollisionProducts(Vector2D point, Particle p1, Particle p2)
     {
         // Limit total particles to prevent explosion
         int currentParticleCount = World.Bodies.Count(b => b.UserData is Particle);
         if (currentParticleCount > 100)
             return; // Don't create more if we already have too many
 
-        float availableEnergy = p1.GetKineticEnergy() + p2.GetKineticEnergy();
+        double availableEnergy = p1.GetKineticEnergy() + p2.GetKineticEnergy();
         int productCount = Random.Shared.Next(2, 3); // Reduced from 2-4 to 2-3
 
         for (int i = 0; i < productCount; i++)
         {
-            float angle = Random.Shared.NextSingle() * MathF.PI * 2;
-            ArtemisEngine.Vector2 direction = new ArtemisEngine.Vector2(MathF.Cos(angle), MathF.Sin(angle));
+            double angle = Random.Shared.NextDouble() * Math.PI * 2;
+            Vector2D direction = Vector2D.FromAngle(angle);
 
-            float energyFraction = Random.Shared.NextSingle() * 0.4f;
-            float speed = MathF.Sqrt(2 * availableEnergy * energyFraction);
+            double energyFraction = Random.Shared.NextDouble() * 0.4;
+            double speed = Math.Sqrt(2 * availableEnergy * energyFraction);
 
-            ParticleType productType = Random.Shared.NextSingle() < 0.5f
+            ParticleType productType = Random.Shared.NextDouble() < 0.5
                 ? ParticleType.Photon
                 : ParticleType.Electron;
 
             // Spawn particles slightly away from collision point to prevent immediate re-collision
-            ArtemisEngine.Vector2 spawnPoint = point + direction * 0.5f;
+            Vector2D spawnPoint = point + direction * 0.5;
             var product = new Particle(productType, spawnPoint, direction * speed);
 
             // Disable CCD for collision products - they're slower and don't need it
             // This also prevents the infinite collision loop
-            product.Body.UseCCD = false;
+            product.Body.IsBullet = false;
 
             World.AddBody(product.Body);
         }
@@ -380,7 +381,7 @@ public class ParticleColliderWindow : GraphicsWindow
         _experiment.Update(deltaTime, World);
 
         // Clean up old collision events
-        _recentCollisions.RemoveAll(c => _experiment.SimulationTime - c.timestamp > 2.0f);
+        _recentCollisions.RemoveAll(c => _experiment.SimulationTime - c.timestamp > 2.0);
     }
 
     protected override void Render()
@@ -398,10 +399,10 @@ public class ParticleColliderWindow : GraphicsWindow
         {
             Color4 detectorColor = detector.Type switch
             {
-                DetectorType.Tracker => new Color4(0.2f, 0.5f, 0.8f, 0.4f),
-                DetectorType.Calorimeter => new Color4(0.5f, 0.8f, 0.2f, 0.4f),
-                DetectorType.MuonChamber => new Color4(0.8f, 0.5f, 0.2f, 0.4f),
-                DetectorType.InteractionPoint => new Color4(1f, 0.2f, 0.2f, 0.6f),
+                DetectorType2D.Tracker => new Color4(0.2f, 0.5f, 0.8f, 0.4f),
+                DetectorType2D.Calorimeter => new Color4(0.5f, 0.8f, 0.2f, 0.4f),
+                DetectorType2D.MuonChamber => new Color4(0.8f, 0.5f, 0.2f, 0.4f),
+                DetectorType2D.InteractionPoint => new Color4(1f, 0.2f, 0.2f, 0.6f),
                 _ => new Color4(0.5f, 0.5f, 0.5f, 0.4f)
             };
 
@@ -455,7 +456,7 @@ public class ParticleColliderWindow : GraphicsWindow
             DrawCircle(particlePos, radius, color, true);
 
             // Velocity vector
-            if (particle.Body.Velocity.Length > 0.5f)
+            if (particle.Body.Velocity.Magnitude > 0.5)
             {
                 var velEnd = ToCavalier(
                     particle.Body.Position + particle.Body.Velocity.Normalized * 2f,
@@ -509,13 +510,13 @@ public class ParticleColliderWindow : GraphicsWindow
         for (int i = -gridLines; i <= gridLines; i++)
         {
             // Horizontal lines
-            var start = ToCavalier(new ArtemisEngine.Vector2(-gridLines * gridSize, i * gridSize), 0);
-            var end = ToCavalier(new ArtemisEngine.Vector2(gridLines * gridSize, i * gridSize), 0);
+            var start = ToCavalier(new Vector2D(-gridLines * gridSize, i * gridSize), 0);
+            var end = ToCavalier(new Vector2D(gridLines * gridSize, i * gridSize), 0);
             DrawLine(start, end, gridColor, 1f);
 
             // Vertical lines
-            start = ToCavalier(new ArtemisEngine.Vector2(i * gridSize, -gridLines * gridSize), 0);
-            end = ToCavalier(new ArtemisEngine.Vector2(i * gridSize, gridLines * gridSize), 0);
+            start = ToCavalier(new Vector2D(i * gridSize, -gridLines * gridSize), 0);
+            end = ToCavalier(new Vector2D(i * gridSize, gridLines * gridSize), 0);
             DrawLine(start, end, gridColor, 1f);
         }
     }
@@ -542,10 +543,10 @@ public class ParticleColliderWindow : GraphicsWindow
                 continue;
 
             // Ring position
-            var p1 = new ArtemisEngine.Vector2(
+            var p1 = new Vector2D(
                 MathF.Cos(angle1) * _accelerator.Radius,
                 MathF.Sin(angle1) * _accelerator.Radius);
-            var p2 = new ArtemisEngine.Vector2(
+            var p2 = new Vector2D(
                 MathF.Cos(angle2) * _accelerator.Radius,
                 MathF.Sin(angle2) * _accelerator.Radius);
 
@@ -581,10 +582,10 @@ public class ParticleColliderWindow : GraphicsWindow
             if (isBack != drawBackHalf)
                 continue;
 
-            var p1 = new ArtemisEngine.Vector2(
+            var p1 = new Vector2D(
                 MathF.Cos(angle1) * _accelerator.Radius,
                 MathF.Sin(angle1) * _accelerator.Radius);
-            var p2 = new ArtemisEngine.Vector2(
+            var p2 = new Vector2D(
                 MathF.Cos(angle2) * _accelerator.Radius,
                 MathF.Sin(angle2) * _accelerator.Radius);
 
@@ -600,7 +601,7 @@ public class ParticleColliderWindow : GraphicsWindow
     /// <summary>
     /// Draw detector as 3D cylinder projection
     /// </summary>
-    private void Draw3DDetector(ArtemisEngine.Vector2 pos, float radius, Color4 color)
+    private void Draw3DDetector(Vector2D pos, double radius, Color4 color)
     {
         var topPos = ToCavalier(pos, RingHeight + 2);
         var botPos = ToCavalier(pos, RingHeight - 2);
@@ -613,8 +614,8 @@ public class ParticleColliderWindow : GraphicsWindow
         int vLines = 8;
         for (int i = 0; i < vLines; i++)
         {
-            float angle = 2 * MathF.PI * i / vLines;
-            var offset = new ArtemisEngine.Vector2(MathF.Cos(angle) * radius, MathF.Sin(angle) * radius);
+            double angle = 2 * Math.PI * i / vLines;
+            var offset = new Vector2D(Math.Cos(angle) * radius, Math.Sin(angle) * radius);
             var top = ToCavalier(pos + offset, RingHeight + 2);
             var bot = ToCavalier(pos + offset, RingHeight - 2);
             DrawLine(top, bot, new Color4(color.R * 0.7f, color.G * 0.7f, color.B * 0.7f, color.A * 0.5f), 1f);
@@ -624,16 +625,16 @@ public class ParticleColliderWindow : GraphicsWindow
     /// <summary>
     /// Draw ellipse in 3D space
     /// </summary>
-    private void DrawEllipse3D(ArtemisEngine.Vector2 center, float radius, float height, Color4 color)
+    private void DrawEllipse3D(Vector2D center, double radius, float height, Color4 color)
     {
         int segments = 24;
         for (int i = 0; i < segments; i++)
         {
-            float angle1 = 2 * MathF.PI * i / segments;
-            float angle2 = 2 * MathF.PI * (i + 1) / segments;
+            double angle1 = 2 * Math.PI * i / segments;
+            double angle2 = 2 * Math.PI * (i + 1) / segments;
 
-            var p1 = center + new ArtemisEngine.Vector2(MathF.Cos(angle1) * radius, MathF.Sin(angle1) * radius);
-            var p2 = center + new ArtemisEngine.Vector2(MathF.Cos(angle2) * radius, MathF.Sin(angle2) * radius);
+            var p1 = center + new Vector2D(Math.Cos(angle1) * radius, Math.Sin(angle1) * radius);
+            var p2 = center + new Vector2D(Math.Cos(angle2) * radius, Math.Sin(angle2) * radius);
 
             DrawLine(ToCavalier(p1, height), ToCavalier(p2, height), color, 1f);
         }
@@ -642,7 +643,7 @@ public class ParticleColliderWindow : GraphicsWindow
     /// <summary>
     /// Draw particle trail in 3D
     /// </summary>
-    private void Draw3DTrail(List<ArtemisEngine.Vector2> points, Color4 color)
+    private void Draw3DTrail(IList<Vector2D> points, Color4 color)
     {
         if (points.Count < 2) return;
 
@@ -693,8 +694,8 @@ public class ParticleColliderWindow : GraphicsWindow
         // Panel header line
         float headerY = lpY - panelHeight * 0.08f;
         DrawLine(
-            new ArtemisEngine.Vector2(lpX + panelWidth * 0.05f, headerY),
-            new ArtemisEngine.Vector2(lpX + panelWidth * 0.95f, headerY),
+            new Vector2D(lpX + panelWidth * 0.05f, headerY),
+            new Vector2D(lpX + panelWidth * 0.95f, headerY),
             new Color4(0.2f, 0.8f, 1f, 0.8f), 2f);
 
         // BEAM 1 gauge
@@ -728,8 +729,8 @@ public class ParticleColliderWindow : GraphicsWindow
         // Header line
         headerY = rpY - panelHeight * 0.08f;
         DrawLine(
-            new ArtemisEngine.Vector2(rpX + panelWidth * 0.05f, headerY),
-            new ArtemisEngine.Vector2(rpX + panelWidth * 0.95f, headerY),
+            new Vector2D(rpX + panelWidth * 0.05f, headerY),
+            new Vector2D(rpX + panelWidth * 0.95f, headerY),
             new Color4(1f, 0.5f, 0.2f, 0.8f), 2f);
 
         // Collision counter display (visual bars)
@@ -753,7 +754,7 @@ public class ParticleColliderWindow : GraphicsWindow
     private void DrawPanelBackground(float x, float y, float width, float height)
     {
         // Dark semi-transparent background
-        var center = new ArtemisEngine.Vector2(x + width / 2, y - height / 2);
+        var center = new Vector2D(x + width / 2, y - height / 2);
         DrawBox(center, width, height, 0, new Color4(0.05f, 0.08f, 0.12f, 0.85f), true);
 
         // Border
@@ -764,20 +765,20 @@ public class ParticleColliderWindow : GraphicsWindow
         Color4 accentColor = new Color4(0.3f, 0.7f, 1f, 0.8f);
 
         // Top-left corner
-        DrawLine(new ArtemisEngine.Vector2(x, y), new ArtemisEngine.Vector2(x + cornerSize, y), accentColor, 2f);
-        DrawLine(new ArtemisEngine.Vector2(x, y), new ArtemisEngine.Vector2(x, y - cornerSize), accentColor, 2f);
+        DrawLine(new Vector2D(x, y), new Vector2D(x + cornerSize, y), accentColor, 2f);
+        DrawLine(new Vector2D(x, y), new Vector2D(x, y - cornerSize), accentColor, 2f);
 
         // Top-right corner
-        DrawLine(new ArtemisEngine.Vector2(x + width, y), new ArtemisEngine.Vector2(x + width - cornerSize, y), accentColor, 2f);
-        DrawLine(new ArtemisEngine.Vector2(x + width, y), new ArtemisEngine.Vector2(x + width, y - cornerSize), accentColor, 2f);
+        DrawLine(new Vector2D(x + width, y), new Vector2D(x + width - cornerSize, y), accentColor, 2f);
+        DrawLine(new Vector2D(x + width, y), new Vector2D(x + width, y - cornerSize), accentColor, 2f);
 
         // Bottom-left corner
-        DrawLine(new ArtemisEngine.Vector2(x, y - height), new ArtemisEngine.Vector2(x + cornerSize, y - height), accentColor, 2f);
-        DrawLine(new ArtemisEngine.Vector2(x, y - height), new ArtemisEngine.Vector2(x, y - height + cornerSize), accentColor, 2f);
+        DrawLine(new Vector2D(x, y - height), new Vector2D(x + cornerSize, y - height), accentColor, 2f);
+        DrawLine(new Vector2D(x, y - height), new Vector2D(x, y - height + cornerSize), accentColor, 2f);
 
         // Bottom-right corner
-        DrawLine(new ArtemisEngine.Vector2(x + width, y - height), new ArtemisEngine.Vector2(x + width - cornerSize, y - height), accentColor, 2f);
-        DrawLine(new ArtemisEngine.Vector2(x + width, y - height), new ArtemisEngine.Vector2(x + width, y - height + cornerSize), accentColor, 2f);
+        DrawLine(new Vector2D(x + width, y - height), new Vector2D(x + width - cornerSize, y - height), accentColor, 2f);
+        DrawLine(new Vector2D(x + width, y - height), new Vector2D(x + width, y - height + cornerSize), accentColor, 2f);
     }
 
     private void DrawGauge(float x, float y, float width, float height, float fillPercent, Color4 fillColor, string label)
@@ -785,14 +786,14 @@ public class ParticleColliderWindow : GraphicsWindow
         fillPercent = Math.Clamp(fillPercent, 0f, 1f);
 
         // Background
-        var bgCenter = new ArtemisEngine.Vector2(x + width / 2, y - height / 2);
+        var bgCenter = new Vector2D(x + width / 2, y - height / 2);
         DrawBox(bgCenter, width, height, 0, new Color4(0.1f, 0.1f, 0.15f, 0.9f), true);
 
         // Fill bar
         if (fillPercent > 0.01f)
         {
             float fillWidth = width * fillPercent * 0.95f;
-            var fillCenter = new ArtemisEngine.Vector2(x + fillWidth / 2 + width * 0.025f, y - height / 2);
+            var fillCenter = new Vector2D(x + fillWidth / 2 + width * 0.025f, y - height / 2);
             DrawBox(fillCenter, fillWidth, height * 0.7f, 0, fillColor, true);
 
             // Glow effect on the fill
@@ -803,7 +804,7 @@ public class ParticleColliderWindow : GraphicsWindow
         DrawBox(bgCenter, width, height, 0, new Color4(0.3f, 0.5f, 0.7f, 0.6f), false);
 
         // Label indicator (small box on left)
-        var labelBox = new ArtemisEngine.Vector2(x - height * 0.8f, y - height / 2);
+        var labelBox = new Vector2D(x - height * 0.8f, y - height / 2);
         DrawBox(labelBox, height * 1.2f, height, 0, fillColor, true);
         DrawBox(labelBox, height * 1.2f, height, 0, new Color4(1f, 1f, 1f, 0.4f), false);
     }
@@ -835,12 +836,12 @@ public class ParticleColliderWindow : GraphicsWindow
 
             if (count > 0)
             {
-                var barCenter = new ArtemisEngine.Vector2(barX, y - height + barHeight / 2);
+                var barCenter = new Vector2D(barX, y - height + barHeight / 2);
                 DrawBox(barCenter, barWidth * 0.7f, barHeight, 0, color, true);
             }
 
             // Base indicator
-            DrawCircle(new ArtemisEngine.Vector2(barX, y - height - barWidth * 0.3f), barWidth * 0.2f, color, true);
+            DrawCircle(new Vector2D(barX, y - height - barWidth * 0.3f), barWidth * 0.2f, color, true);
         }
     }
 
@@ -872,7 +873,7 @@ public class ParticleColliderWindow : GraphicsWindow
                     dotColor = new Color4(0.15f, 0.15f, 0.2f, 0.5f);
                 }
 
-                DrawCircle(new ArtemisEngine.Vector2(dotX, dotY), dotRadius, dotColor, true);
+                DrawCircle(new Vector2D(dotX, dotY), dotRadius, dotColor, true);
             }
         }
     }
@@ -913,23 +914,23 @@ public class ParticleColliderWindow : GraphicsWindow
         Color4 color = isOn ? onColor : offColor;
 
         // Outer ring
-        DrawCircle(new ArtemisEngine.Vector2(x, y), size, new Color4(0.2f, 0.25f, 0.3f, 0.8f), true);
+        DrawCircle(new Vector2D(x, y), size, new Color4(0.2f, 0.25f, 0.3f, 0.8f), true);
 
         // Inner light
-        DrawCircle(new ArtemisEngine.Vector2(x, y), size * 0.7f, color, true);
+        DrawCircle(new Vector2D(x, y), size * 0.7f, color, true);
 
         // Highlight if on
         if (isOn)
         {
-            DrawCircle(new ArtemisEngine.Vector2(x, y), size * 1.3f, new Color4(color.R, color.G, color.B, 0.2f), true);
-            DrawCircle(new ArtemisEngine.Vector2(x - size * 0.2f, y + size * 0.2f), size * 0.2f,
+            DrawCircle(new Vector2D(x, y), size * 1.3f, new Color4(color.R, color.G, color.B, 0.2f), true);
+            DrawCircle(new Vector2D(x - size * 0.2f, y + size * 0.2f), size * 0.2f,
                 new Color4(1f, 1f, 1f, 0.4f), true);
         }
     }
 
     private void DrawEnergyRingIndicator(float centerX, float centerY, float radius, float energy)
     {
-        var center = new ArtemisEngine.Vector2(centerX, centerY);
+        var center = new Vector2D(centerX, centerY);
 
         // Background ring
         DrawCircle(center, radius, new Color4(0.08f, 0.1f, 0.15f, 0.8f), true);
@@ -947,8 +948,8 @@ public class ParticleColliderWindow : GraphicsWindow
                 float angle1 = -MathF.PI / 2 + (2 * MathF.PI * i / 32);
                 float angle2 = -MathF.PI / 2 + (2 * MathF.PI * (i + 1) / 32);
 
-                var p1 = center + new ArtemisEngine.Vector2(MathF.Cos(angle1), MathF.Sin(angle1)) * innerRadius;
-                var p2 = center + new ArtemisEngine.Vector2(MathF.Cos(angle2), MathF.Sin(angle2)) * innerRadius;
+                var p1 = center + new Vector2D(MathF.Cos(angle1), MathF.Sin(angle1)) * innerRadius;
+                var p2 = center + new Vector2D(MathF.Cos(angle2), MathF.Sin(angle2)) * innerRadius;
 
                 float t = (float)i / segments;
                 Color4 arcColor = new Color4(0.2f + t * 0.8f, 1f - t * 0.4f, 0.3f, 0.9f);
@@ -963,7 +964,7 @@ public class ParticleColliderWindow : GraphicsWindow
         for (int i = 0; i < 8; i++)
         {
             float angle = -MathF.PI / 2 + (2 * MathF.PI * i / 8);
-            var dotPos = center + new ArtemisEngine.Vector2(MathF.Cos(angle), MathF.Sin(angle)) * (radius * 0.9f);
+            var dotPos = center + new Vector2D(MathF.Cos(angle), MathF.Sin(angle)) * (radius * 0.9f);
             bool lit = (i / 8f) < energyPercent;
             DrawCircle(dotPos, radius * 0.06f, lit ? new Color4(0.3f, 1f, 0.5f, 0.9f) : new Color4(0.2f, 0.2f, 0.25f, 0.5f), true);
         }
@@ -979,14 +980,14 @@ public class ParticleColliderWindow : GraphicsWindow
         float barHeight = width * 0.08f;
 
         // Background
-        var bgCenter = new ArtemisEngine.Vector2(centerX, y - barHeight / 2);
+        var bgCenter = new Vector2D(centerX, y - barHeight / 2);
         DrawBox(bgCenter, width, barHeight, 0, new Color4(0.08f, 0.1f, 0.15f, 0.8f), true);
 
         // Progress fill
         float fillWidth = width * cyclePercent * 0.95f;
         if (fillWidth > 0.1f)
         {
-            var fillCenter = new ArtemisEngine.Vector2(centerX - width / 2 + fillWidth / 2 + width * 0.025f, y - barHeight / 2);
+            var fillCenter = new Vector2D(centerX - width / 2 + fillWidth / 2 + width * 0.025f, y - barHeight / 2);
             DrawBox(fillCenter, fillWidth, barHeight * 0.6f, 0, new Color4(0.2f, 0.6f, 1f, 0.7f), true);
         }
 
@@ -996,8 +997,8 @@ public class ParticleColliderWindow : GraphicsWindow
             float tickX = centerX - width / 2 + (width * i / 10f);
             float tickHeight = (i % 5 == 0) ? barHeight * 0.5f : barHeight * 0.25f;
             DrawLine(
-                new ArtemisEngine.Vector2(tickX, y),
-                new ArtemisEngine.Vector2(tickX, y + tickHeight),
+                new Vector2D(tickX, y),
+                new Vector2D(tickX, y + tickHeight),
                 new Color4(0.4f, 0.6f, 0.8f, 0.6f), 1f);
         }
 
@@ -1011,7 +1012,7 @@ public class ParticleColliderWindow : GraphicsWindow
             float dotX = centerX - width * 0.3f + i * width * 0.15f;
             float dotY = y + barHeight * 0.8f;
             bool lit = i <= cycleNumber;
-            DrawCircle(new ArtemisEngine.Vector2(dotX, dotY), barHeight * 0.2f,
+            DrawCircle(new Vector2D(dotX, dotY), barHeight * 0.2f,
                 lit ? new Color4(0.3f, 0.8f, 1f, 0.9f) : new Color4(0.15f, 0.2f, 0.25f, 0.5f), true);
         }
     }

@@ -1,10 +1,11 @@
-using ArtemisEngine;
+using Artemis.Physics2D;
+using Artemis.Physics2D.Particles;
 
 namespace ParticleColliderDemo;
 
 /// <summary>
-/// Renderer for particle collider visualization
-/// Inspired by LHC detector event displays (ATLAS, CMS)
+/// Renderer for particle collider visualization.
+/// Inspired by LHC detector event displays (ATLAS, CMS).
 /// </summary>
 public class LHCRenderer
 {
@@ -14,8 +15,8 @@ public class LHCRenderer
     private ConsoleColor[,] _colorBuffer;
 
     // View parameters
-    private Vector2 _cameraCenter;
-    private float _zoom;
+    private Vector2D _cameraCenter;
+    private double _zoom;
 
     public LHCRenderer(int width, int height)
     {
@@ -23,11 +24,11 @@ public class LHCRenderer
         _height = height;
         _buffer = new char[width, height];
         _colorBuffer = new ConsoleColor[width, height];
-        _cameraCenter = new Vector2(0, 0);
-        _zoom = 1.0f;
+        _cameraCenter = Vector2D.Zero;
+        _zoom = 1.0;
     }
 
-    public void SetCamera(Vector2 center, float zoom)
+    public void SetCamera(Vector2D center, double zoom)
     {
         _cameraCenter = center;
         _zoom = zoom;
@@ -51,17 +52,11 @@ public class LHCRenderer
         int segments = 120;
         for (int i = 0; i < segments; i++)
         {
-            float angle1 = (float)i / segments * MathF.PI * 2;
-            float angle2 = (float)(i + 1) / segments * MathF.PI * 2;
+            double angle1 = (double)i / segments * Math.PI * 2;
+            double angle2 = (double)(i + 1) / segments * Math.PI * 2;
 
-            Vector2 p1 = accelerator.Center + new Vector2(
-                MathF.Cos(angle1) * accelerator.Radius,
-                MathF.Sin(angle1) * accelerator.Radius
-            );
-            Vector2 p2 = accelerator.Center + new Vector2(
-                MathF.Cos(angle2) * accelerator.Radius,
-                MathF.Sin(angle2) * accelerator.Radius
-            );
+            Vector2D p1 = accelerator.Center + Vector2D.FromAngle(angle1, accelerator.Radius);
+            Vector2D p2 = accelerator.Center + Vector2D.FromAngle(angle2, accelerator.Radius);
 
             DrawLine(p1, p2, '═', ConsoleColor.DarkGray);
         }
@@ -70,7 +65,7 @@ public class LHCRenderer
         var ips = accelerator.GetInteractionPoints();
         foreach (var ip in ips)
         {
-            DrawCircle(ip, 0.5f, '◉', ConsoleColor.Red);
+            DrawCircle(ip, 0.5, '◉', ConsoleColor.Red);
         }
     }
 
@@ -80,10 +75,10 @@ public class LHCRenderer
         {
             char symbol = detector.Type switch
             {
-                DetectorType.Tracker => '░',
-                DetectorType.Calorimeter => '▒',
-                DetectorType.MuonChamber => '▓',
-                DetectorType.InteractionPoint => '◉',
+                DetectorType2D.Tracker => '░',
+                DetectorType2D.Calorimeter => '▒',
+                DetectorType2D.MuonChamber => '▓',
+                DetectorType2D.InteractionPoint => '◉',
                 _ => '?'
             };
 
@@ -99,7 +94,7 @@ public class LHCRenderer
             for (int i = 0; i < particle.Trail.Count - 1; i++)
             {
                 // Fade trail
-                ConsoleColor trailColor = particle.Properties.Color;
+                ConsoleColor trailColor = particle.Properties.GetConsoleColor();
                 if (i < particle.Trail.Count / 2)
                 {
                     trailColor = ConsoleColor.DarkGray;
@@ -122,28 +117,31 @@ public class LHCRenderer
                 ParticleType.Photon => '☼',
                 ParticleType.Higgs => 'H',
                 ParticleType.Quark => 'q',
+                ParticleType.Muon => 'μ',
+                ParticleType.Neutrino => 'ν',
+                ParticleType.Pion => 'π',
                 _ => '?'
             };
 
             _buffer[screenPos.x, screenPos.y] = symbol;
-            _colorBuffer[screenPos.x, screenPos.y] = particle.Properties.Color;
+            _colorBuffer[screenPos.x, screenPos.y] = particle.Properties.GetConsoleColor();
         }
 
         // Draw velocity vector
-        if (particle.Body.Velocity.Length > 1)
+        if (particle.Body.Velocity.Magnitude > 1)
         {
-            Vector2 end = particle.Body.Position + particle.Body.Velocity.Normalized * 2;
-            DrawLine(particle.Body.Position, end, '→', particle.Properties.Color);
+            Vector2D end = particle.Body.Position + particle.Body.Velocity.Normalized * 2;
+            DrawLine(particle.Body.Position, end, '→', particle.Properties.GetConsoleColor());
         }
     }
 
-    public void DrawCollisionEvent(ParticleCollisionEvent evt, float age)
+    public void DrawCollisionEvent(ParticleCollisionEvent evt, double age)
     {
-        if (age > 2.0f) return; // Fade out old events
+        if (age > 2.0) return; // Fade out old events
 
         // Draw explosion effect at collision point
-        float radius = age * 3;
-        ConsoleColor color = age < 0.5f ? ConsoleColor.White : ConsoleColor.Yellow;
+        double radius = age * 3;
+        ConsoleColor color = age < 0.5 ? ConsoleColor.White : ConsoleColor.Yellow;
 
         DrawCircle(evt.CollisionPoint, radius, '*', color);
 
@@ -156,18 +154,15 @@ public class LHCRenderer
         }
     }
 
-    private void DrawCircle(Vector2 center, float radius, char symbol, ConsoleColor color)
+    private void DrawCircle(Vector2D center, double radius, char symbol, ConsoleColor color)
     {
         int segments = (int)(radius * 20);
         segments = Math.Clamp(segments, 8, 100);
 
         for (int i = 0; i < segments; i++)
         {
-            float angle = (float)i / segments * MathF.PI * 2;
-            Vector2 point = center + new Vector2(
-                MathF.Cos(angle) * radius,
-                MathF.Sin(angle) * radius
-            );
+            double angle = (double)i / segments * Math.PI * 2;
+            Vector2D point = center + Vector2D.FromAngle(angle, radius);
 
             var screenPos = WorldToScreen(point);
             if (IsOnScreen(screenPos))
@@ -178,18 +173,18 @@ public class LHCRenderer
         }
     }
 
-    private void DrawLine(Vector2 start, Vector2 end, char symbol, ConsoleColor color)
+    private void DrawLine(Vector2D start, Vector2D end, char symbol, ConsoleColor color)
     {
-        Vector2 delta = end - start;
-        float distance = delta.Length;
+        Vector2D delta = end - start;
+        double distance = delta.Magnitude;
         int steps = (int)(distance * 2);
 
         if (steps == 0) return;
 
         for (int i = 0; i <= steps; i++)
         {
-            float t = (float)i / steps;
-            Vector2 point = start + delta * t;
+            double t = (double)i / steps;
+            Vector2D point = start + delta * t;
 
             var screenPos = WorldToScreen(point);
             if (IsOnScreen(screenPos))
@@ -213,9 +208,9 @@ public class LHCRenderer
         }
     }
 
-    private (int x, int y) WorldToScreen(Vector2 worldPos)
+    private (int x, int y) WorldToScreen(Vector2D worldPos)
     {
-        Vector2 offset = worldPos - _cameraCenter;
+        Vector2D offset = worldPos - _cameraCenter;
         int x = (int)((offset.X * _zoom) + _width / 2);
         int y = (int)((-offset.Y * _zoom) + _height / 2); // Flip Y
 
@@ -240,7 +235,6 @@ public class LHCRenderer
                 Console.ForegroundColor = _colorBuffer[x, y];
                 Console.Write(_buffer[x, y]);
             }
-            // Don't use WriteLine - use SetCursorPosition to avoid scrolling
         }
 
         Console.ResetColor();
@@ -248,7 +242,7 @@ public class LHCRenderer
 
     public void DrawUI(CollisionExperiment experiment, int particleCount)
     {
-        // Draw compact UI status bar at fixed position (avoid scrolling)
+        // Draw compact UI status bar at fixed position
         int uiLine = _height;
 
         Console.SetCursorPosition(0, uiLine);
@@ -271,15 +265,16 @@ public class LHCRenderer
         Console.WriteLine("Particle Types:");
 
         var types = Enum.GetValues<ParticleType>();
+        int count = 0;
         foreach (var type in types)
         {
             var props = ParticleProperties.Create(type);
-            Console.ForegroundColor = props.Color;
+            Console.ForegroundColor = props.GetConsoleColor();
             Console.Write($"{props.Symbol} ");
             Console.ForegroundColor = ConsoleColor.Gray;
             Console.Write($"= {type,-10} ");
 
-            if ((int)type % 3 == 2)
+            if (++count % 3 == 0)
                 Console.WriteLine();
         }
 

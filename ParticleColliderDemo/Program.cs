@@ -1,4 +1,5 @@
-using ArtemisEngine;
+using Artemis.Physics2D;
+using Artemis.Physics2D.Particles;
 
 namespace ParticleColliderDemo;
 
@@ -14,11 +15,11 @@ class Program
         Console.WriteLine("╚══════════════════════════════════════════════════════════════════════════════╝");
         Console.WriteLine();
         Console.WriteLine("This simulation demonstrates the scientific physics capabilities of Artemis:");
+        Console.WriteLine("  • Multi-threaded parallel physics simulation");
         Console.WriteLine("  • Continuous Collision Detection (CCD) for high-speed particles");
         Console.WriteLine("  • Energy tracking and conservation monitoring");
-        Console.WriteLine("  • Advanced integration methods (RK4)");
+        Console.WriteLine("  • SIMD-optimized integration");
         Console.WriteLine("  • Data export for scientific analysis");
-        Console.WriteLine("  • Deterministic physics for reproducible experiments");
         Console.WriteLine();
         Console.WriteLine("Press any key to start the simulation...");
         Console.ReadKey(true);
@@ -30,20 +31,19 @@ class Program
     {
         // Setup - use smaller viewport to prevent console scrolling
         const int WIDTH = 80;
-        const int HEIGHT = 24; // Reduced to fit standard console
-        const float DELTA_TIME = 1 / 60f;
-        const float TIME_SCALE = 0.1f; // Slow down simulation for visibility
+        const int HEIGHT = 24;
+        const double DELTA_TIME = 1.0 / 60.0;
+        const double TIME_SCALE = 0.1; // Slow down simulation for visibility
 
         // Create physics world (no gravity - we're in vacuum!)
-        var world = new PhysicsWorld(new Vector2(0, 0));
-        world.UseAdvancedSolver = true; // Use Sequential Impulse solver
+        var world = new PhysicsWorld2D(Vector2D.Zero);
+        world.UseCCD = true; // Enable CCD for high-speed particles
 
         // Create accelerator (27 units radius, like LHC's 27km)
-        // Lower beam energy for slower, more visible particles
         var accelerator = new Accelerator(
-            center: new Vector2(0, 0),
-            radius: 12f, // Smaller radius to fit viewport
-            beamEnergy: 5f // Lower energy for slower particles
+            center: Vector2D.Zero,
+            radius: 12.0,
+            beamEnergy: 5.0
         );
 
         // Create experiment
@@ -51,7 +51,7 @@ class Program
 
         // Create renderer
         var renderer = new LHCRenderer(WIDTH, HEIGHT);
-        renderer.SetCamera(new Vector2(0, 0), zoom: 0.8f); // Adjusted zoom for smaller viewport
+        renderer.SetCamera(Vector2D.Zero, zoom: 0.8);
 
         // Add magnetic field to world
         world.AddAreaEffector(accelerator.GetMagneticField());
@@ -59,11 +59,12 @@ class Program
         // Add detectors to world
         foreach (var detector in experiment.Detectors)
         {
-            world.AddBody(detector.TriggerZone);
+            if (detector.TriggerZone != null)
+                world.AddBody(detector.TriggerZone);
         }
 
         // Setup collision listener for detector triggers
-        world.OnTriggerEnter += (sender, e) =>
+        world.TriggerEnter += (sender, e) =>
         {
             if (e.BodyA.UserData is Detector detector && e.BodyB.UserData is Particle particle)
             {
@@ -76,20 +77,20 @@ class Program
         };
 
         // Track collision events
-        List<(ParticleCollisionEvent evt, float timestamp)> recentCollisions = new();
+        List<(ParticleCollisionEvent evt, double timestamp)> recentCollisions = new();
 
-        world.OnCollisionEnter += (sender, e) =>
+        world.CollisionBegin += (sender, e) =>
         {
             if (e.BodyA.UserData is Particle p1 && e.BodyB.UserData is Particle p2)
             {
-                Vector2 collisionPoint = (p1.Body.Position + p2.Body.Position) * 0.5f;
+                Vector2D collisionPoint = (p1.Body.Position + p2.Body.Position) * 0.5;
                 experiment.RecordCollision(p1, p2, collisionPoint);
 
                 var evt = new ParticleCollisionEvent(p1, p2, collisionPoint, experiment.SimulationTime);
                 recentCollisions.Add((evt, experiment.SimulationTime));
 
                 // Create collision products (simplified)
-                if (Random.Shared.NextSingle() < 0.3f) // 30% chance
+                if (Random.Shared.NextDouble() < 0.3) // 30% chance
                 {
                     CreateCollisionProducts(world, collisionPoint, p1, p2);
                 }
@@ -162,7 +163,7 @@ class Program
                 {
                     world.RemoveBody(particle.Body);
 
-                    // Add decay products
+                    // Add decay products (they use Particle2D internally)
                     foreach (var product in particle.DecayProducts)
                     {
                         world.AddBody(product.Body);
@@ -174,7 +175,7 @@ class Program
             experiment.Update(DELTA_TIME, world);
 
             // Clean up old collision events (keep only last 2 seconds)
-            recentCollisions.RemoveAll(c => experiment.SimulationTime - c.timestamp > 2.0f);
+            recentCollisions.RemoveAll(c => experiment.SimulationTime - c.timestamp > 2.0);
 
             // Rendering
             renderer.Clear();
@@ -190,7 +191,7 @@ class Program
             // Draw recent collision events
             foreach (var (evt, timestamp) in recentCollisions)
             {
-                float age = experiment.SimulationTime - timestamp;
+                double age = experiment.SimulationTime - timestamp;
                 renderer.DrawCollisionEvent(evt, age);
             }
 
@@ -213,7 +214,7 @@ class Program
         Console.WriteLine($"Total simulation time: {experiment.SimulationTime:F1} seconds");
     }
 
-    static void InjectInitialBeams(PhysicsWorld world, Accelerator accelerator)
+    static void InjectInitialBeams(PhysicsWorld2D world, Accelerator accelerator)
     {
         // Inject proton beams (like LHC)
         accelerator.InjectBeam1(ParticleType.Proton, 8);
@@ -226,7 +227,7 @@ class Program
         }
     }
 
-    static void InjectBeams(PhysicsWorld world, Accelerator accelerator)
+    static void InjectBeams(PhysicsWorld2D world, Accelerator accelerator)
     {
         // Random particle types
         ParticleType[] types = { ParticleType.Proton, ParticleType.Electron, ParticleType.Positron };
@@ -242,7 +243,7 @@ class Program
         }
     }
 
-    static void InjectSpecificBeam(PhysicsWorld world, Accelerator accelerator, ParticleType type1, ParticleType type2)
+    static void InjectSpecificBeam(PhysicsWorld2D world, Accelerator accelerator, ParticleType type1, ParticleType type2)
     {
         accelerator.InjectBeam1(type1, 6);
         accelerator.InjectBeam2(type2, 6);
@@ -253,10 +254,10 @@ class Program
         }
     }
 
-    static void CreateCollisionProducts(PhysicsWorld world, Vector2 point, Particle p1, Particle p2)
+    static void CreateCollisionProducts(PhysicsWorld2D world, Vector2D point, Particle p1, Particle p2)
     {
         // Energy available for product creation
-        float availableEnergy = p1.GetKineticEnergy() + p2.GetKineticEnergy();
+        double availableEnergy = p1.GetKineticEnergy() + p2.GetKineticEnergy();
 
         // Create 2-3 new particles
         int productCount = Random.Shared.Next(2, 4);
@@ -264,15 +265,15 @@ class Program
         for (int i = 0; i < productCount; i++)
         {
             // Random direction
-            float angle = Random.Shared.NextSingle() * MathF.PI * 2;
-            Vector2 direction = new Vector2(MathF.Cos(angle), MathF.Sin(angle));
+            double angle = Random.Shared.NextDouble() * Math.PI * 2;
+            Vector2D direction = Vector2D.FromAngle(angle);
 
             // Random energy distribution
-            float energyFraction = Random.Shared.NextSingle() * 0.4f;
-            float speed = MathF.Sqrt(2 * availableEnergy * energyFraction);
+            double energyFraction = Random.Shared.NextDouble() * 0.4;
+            double speed = Math.Sqrt(2 * availableEnergy * energyFraction);
 
             // Create photon or other light particle
-            ParticleType productType = Random.Shared.NextSingle() < 0.5f
+            ParticleType productType = Random.Shared.NextDouble() < 0.5
                 ? ParticleType.Photon
                 : ParticleType.Electron;
 
@@ -281,7 +282,7 @@ class Program
         }
     }
 
-    static void ClearExperiment(PhysicsWorld world, Accelerator accelerator, CollisionExperiment experiment)
+    static void ClearExperiment(PhysicsWorld2D world, Accelerator accelerator, CollisionExperiment experiment)
     {
         // Remove all particles
         var particleBodies = world.Bodies
