@@ -1,55 +1,55 @@
-# Guía de contribución
+# Contributing Guide
 
-¡Gracias por tu interés en contribuir a Artemis Physics Engine! Este documento explica cómo proponer cambios, reportar problemas y preparar tus aportes.
+Thank you for your interest in contributing to Artemis Physics Engine! This document explains how to propose changes, report issues, and prepare your contributions.
 
-## Código de conducta
+## Code of Conduct
 
-Sé respetuoso y colaborativo. Cualquier interacción en issues, discusiones o PRs debe mantener un tono profesional y constructivo.
+Be respectful and collaborative. Any interaction in issues, discussions, or PRs should maintain a professional and constructive tone.
 
-## Cómo empezar
+## Getting Started
 
-1. **Haz un fork** del repositorio y crea una rama desde `main` o la rama principal.
-2. **Mantén los cambios acotados** a un objetivo claro.
-3. **Documenta** cualquier decisión relevante en el PR.
+1. **Fork** the repository and create a branch from `main` or the default branch.
+2. **Keep changes focused** on a clear goal.
+3. **Document** any relevant decisions in the PR.
 
-## Reporte de bugs
+## Reporting Bugs
 
-Incluye la mayor cantidad de contexto posible:
+Include as much context as possible:
 
-- Versión de .NET y sistema operativo.
-- Pasos para reproducir el problema.
-- Resultado esperado y resultado real.
-- Logs o capturas de pantalla si aplica.
+- .NET version and operating system.
+- Steps to reproduce the issue.
+- Expected vs. actual results.
+- Logs or screenshots if applicable.
 
-## Propuesta de nuevas funciones
+## Proposing Features
 
-- Describe el caso de uso y el valor para los usuarios.
-- Incluye ejemplos o pseudocódigo si ayuda a entender el impacto.
-- Evita cambios demasiado amplios sin discusión previa.
+- Describe the use case and value for users.
+- Include examples or pseudocode if it helps explain the impact.
+- Avoid overly broad changes without prior discussion.
 
-## Estilo y calidad del código
+## Code Style and Quality
 
-- Sigue el estilo existente del proyecto.
-- Evita cambios de formato masivo no relacionados.
-- Asegúrate de que el código esté correctamente comentado cuando sea necesario.
+- Follow the existing project style.
+- Avoid large, unrelated formatting changes.
+- Ensure the code is properly commented where needed.
 
-## Pruebas
+## Testing
 
-- Ejecuta las pruebas relevantes antes de abrir el PR.
-- Si no hay pruebas automatizadas para un cambio, describe cómo verificaste el comportamiento.
+- Run relevant tests before opening the PR.
+- If there are no automated tests for a change, describe how you verified behavior.
 
 ## Commits
 
-- Usa mensajes de commit claros y concisos.
-- Un cambio funcional = un commit (cuando sea posible).
+- Use clear, concise commit messages.
+- One functional change = one commit when possible.
 
 ## Pull Requests
 
-Antes de abrir un PR, verifica:
+Before opening a PR, confirm:
 
-- [ ] El código compila y funciona.
-- [ ] Las pruebas pasan (si existen).
-- [ ] La documentación fue actualizada (si aplica).
-- [ ] El alcance del cambio está bien explicado.
+- [ ] The code compiles and works as expected.
+- [ ] Tests pass (if applicable).
+- [ ] Documentation is updated (if needed).
+- [ ] The scope of the change is well explained.
 
-Gracias por ayudar a mejorar Artemis Physics Engine.
+Thank you for helping improve Artemis Physics Engine.
