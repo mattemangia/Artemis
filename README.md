@@ -2135,7 +2135,7 @@ APA-style citation for this project:
 
 ## Contributing
 
-Contributions welcome! Please read our contributing guidelines before submitting PRs.
+Contributions welcome! Please read our [CONTRIBUTING.md](CONTRIBUTING.md) guidelines before submitting PRs.
 
 ---
 
