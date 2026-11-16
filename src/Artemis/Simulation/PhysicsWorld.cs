@@ -22,14 +22,27 @@ namespace Artemis.Simulation
         private readonly List<IPhysicsBody> _bodies;
         private readonly List<IForce> _globalForces;
         private readonly List<ParticleSystem> _particleSystems;
-        private readonly ConcurrentBag<CollisionInfo> _collisionBag;
         private readonly List<CollisionInfo> _collisions;
         private double _accumulator;
 
         // Spatial hashing for broad phase
         private readonly Dictionary<long, List<int>> _spatialGrid;
-        private const float CellSize = 2.0f;
-        private const float InvCellSize = 1f / CellSize;
+        private readonly Stack<List<int>> _cellListPool = new();
+        private readonly List<int> _largeBodies = new();
+        private readonly List<(int A, int B)> _pairs = new();
+        private (int, int, int)[] _cellMin = new (int, int, int)[64];
+        private (int, int, int)[] _cellMax = new (int, int, int)[64];
+        private CollisionInfo[] _narrowPhaseResults = new CollisionInfo[64];
+        private const double MaxCellsPerBody = 64;
+        private const double CellCoordLimit = 1 << 20;
+        private const int ParallelThreshold = 256;
+
+        // Contact solving and sleeping
+        private readonly ContactSolver _solver = new();
+        private readonly SleepManager _sleep = new();
+        private volatile IPhysicsBody[]? _bodySnapshot;
+        private Vector3D _gravity = new(0, -PhysicsConstants.EarthGravity, 0);
+        private double _broadPhaseCellSize = 2.0;
 
         // Thread synchronization
         private readonly ReaderWriterLockSlim _bodiesLock = new();
@@ -43,12 +56,7 @@ namespace Artemis.Simulation
         /// </summary>
         public IReadOnlyList<IPhysicsBody> Bodies
         {
-            get
-            {
-                _bodiesLock.EnterReadLock();
-                try { return _bodies.ToArray(); }
-                finally { _bodiesLock.ExitReadLock(); }
-            }
+            get => GetBodySnapshot();
         }
 
         /// <summary>
@@ -79,7 +87,77 @@ namespace Artemis.Simulation
         /// <summary>
         /// Gets or sets the gravity vector.
         /// </summary>
-        public Vector3D Gravity { get; set; } = new(0, -PhysicsConstants.EarthGravity, 0);
+        public Vector3D Gravity
+        {
+            get => _gravity;
+            set
+            {
+                if (_gravity == value)
+                    return;
+
+                _gravity = value;
+                // Sleeping bodies must notice that "down" has changed.
+                WakeAllBodies();
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets the number of velocity iterations of the contact solver.
+        /// Higher values make stacks and piles stiffer at a linear cost.
+        /// </summary>
+        public int SolverIterations { get; set; } = 12;
+
+        /// <summary>
+        /// Gets or sets the number of penetration recovery iterations.
+        /// </summary>
+        public int PositionIterations { get; set; } = 4;
+
+        /// <summary>
+        /// Gets or sets whether resting bodies may be put to sleep.
+        /// </summary>
+        public bool AllowSleeping { get; set; } = true;
+
+        /// <summary>
+        /// Linear speed (m/s) below which a body counts as resting.
+        /// </summary>
+        public double SleepVelocityThreshold
+        {
+            get => _sleep.SleepVelocityThreshold;
+            set => _sleep.SleepVelocityThreshold = value;
+        }
+
+        /// <summary>
+        /// Angular speed (rad/s) below which a body counts as resting.
+        /// </summary>
+        public double SleepAngularVelocityThreshold
+        {
+            get => _sleep.SleepAngularVelocityThreshold;
+            set => _sleep.SleepAngularVelocityThreshold = value;
+        }
+
+        /// <summary>
+        /// Time (s) a whole island has to rest before it is put to sleep.
+        /// </summary>
+        public double SleepTimeThreshold
+        {
+            get => _sleep.SleepTimeThreshold;
+            set => _sleep.SleepTimeThreshold = value;
+        }
+
+        /// <summary>
+        /// Edge length of the broad-phase grid cells. Should be in the order of the
+        /// size of a typical body.
+        /// </summary>
+        public double BroadPhaseCellSize
+        {
+            get => _broadPhaseCellSize;
+            set
+            {
+                if (!(value > 0) || double.IsInfinity(value))
+                    throw new ArgumentOutOfRangeException(nameof(value), "Cell size must be positive and finite.");
+                _broadPhaseCellSize = value;
+            }
+        }
 
         /// <summary>
         /// Gets or sets whether physics simulation is paused.
@@ -97,7 +175,9 @@ namespace Artemis.Simulation
         public AABB? WorldBounds { get; set; }
 
         /// <summary>
-        /// Gets or sets whether to use continuous collision detection.
+        /// Gets or sets whether to use continuous collision detection. When enabled,
+        /// fast sphere and box bodies are stopped at their first time of impact instead
+        /// of tunnelling through thin obstacles.
         /// </summary>
         public bool UseCCD { get; set; } = false;
 
@@ -139,7 +219,6 @@ namespace Artemis.Simulation
             _globalForces = new List<IForce>();
             _particleSystems = new List<ParticleSystem>();
             _collisions = new List<CollisionInfo>();
-            _collisionBag = new ConcurrentBag<CollisionInfo>();
             _spatialGrid = new Dictionary<long, List<int>>();
         }
 
@@ -164,7 +243,10 @@ namespace Artemis.Simulation
             try
             {
                 if (!_bodies.Contains(body))
+                {
                     _bodies.Add(body);
+                    _bodySnapshot = null;
+                }
             }
             finally { _bodiesLock.ExitWriteLock(); }
         }
@@ -174,9 +256,21 @@ namespace Artemis.Simulation
         /// </summary>
         public bool RemoveBody(IPhysicsBody body)
         {
+            bool removed;
             _bodiesLock.EnterWriteLock();
-            try { return _bodies.Remove(body); }
+            try
+            {
+                removed = _bodies.Remove(body);
+                if (removed)
+                    _bodySnapshot = null;
+            }
             finally { _bodiesLock.ExitWriteLock(); }
+
+            // Whatever was resting on the removed body has lost its support.
+            if (removed)
+                WakeAllBodies();
+
+            return removed;
         }
 
         /// <summary>
@@ -195,7 +289,11 @@ namespace Artemis.Simulation
         public void ClearBodies()
         {
             _bodiesLock.EnterWriteLock();
-            try { _bodies.Clear(); }
+            try
+            {
+                _bodies.Clear();
+                _bodySnapshot = null;
+            }
             finally { _bodiesLock.ExitWriteLock(); }
         }
 
@@ -253,7 +351,12 @@ namespace Artemis.Simulation
         }
 
         /// <summary>
-        /// Performs a single physics step with parallel processing.
+        /// Performs a single physics step.
+        /// <para>
+        /// Pipeline: forces -> velocities -> collision detection -> contact solver ->
+        /// positions (with optional continuous collision detection) -> penetration
+        /// recovery -> sleeping.
+        /// </para>
         /// </summary>
         public void Step(double dt)
         {
@@ -261,18 +364,38 @@ namespace Artemis.Simulation
 
             _collisions.Clear();
 
-            // Apply forces in parallel
-            ApplyForcesParallel(dt);
+            var bodies = GetBodySnapshot();
 
-            // Integrate in parallel
-            IntegrateBodiesParallel(dt);
+            // 1. Forces and velocities. Positions are integrated only after the
+            //    contact solver has removed approaching velocities.
+            IntegrateVelocities(bodies, dt);
 
-            // Build spatial grid and detect collisions
-            BuildSpatialGrid();
-            DetectCollisionsParallel();
+            // 2. Collision detection at the current positions.
+            BroadPhase(bodies);
+            NarrowPhase(bodies);
 
-            // Resolve collisions (sequential for determinism)
-            ResolveCollisions();
+            // 3. Wake sleeping bodies that are being disturbed, then solve contacts.
+            _sleep.BuildIslands(bodies, _collisions);
+            _sleep.WakeDisturbedIslands(bodies, _collisions);
+
+            _solver.VelocityIterations = SolverIterations;
+            _solver.PositionIterations = PositionIterations;
+            _solver.RestitutionThreshold = RestitutionThreshold;
+            _solver.SolveVelocities(_collisions);
+
+            // 4. Positions.
+            IntegratePositions(bodies, dt);
+            _solver.SolvePositions();
+
+            // 5. Sleeping.
+            if (AllowSleeping)
+                _sleep.UpdateSleeping(bodies, dt);
+
+            if (OnCollision != null)
+            {
+                foreach (var collision in _collisions)
+                    OnCollision.Invoke(collision);
+            }
 
             TotalTime += dt;
             StepCount++;
@@ -280,181 +403,272 @@ namespace Artemis.Simulation
             OnPostStep?.Invoke(dt);
         }
 
-        private void ApplyForcesParallel(double dt)
+        private IPhysicsBody[] GetBodySnapshot()
         {
+            var snapshot = _bodySnapshot;
+            if (snapshot != null)
+                return snapshot;
+
             _bodiesLock.EnterReadLock();
             try
             {
-                var gravity = Gravity;
-                var forces = _globalForces.ToArray();
+                snapshot = _bodies.ToArray();
+                _bodySnapshot = snapshot;
+                return snapshot;
+            }
+            finally { _bodiesLock.ExitReadLock(); }
+        }
 
-                Parallel.ForEach(_bodies, body =>
+        private void WakeAllBodies()
+        {
+            foreach (var body in GetBodySnapshot())
+            {
+                if (body.IsSleeping)
+                    body.WakeUp();
+            }
+        }
+
+        private void IntegrateVelocities(IPhysicsBody[] bodies, double dt)
+        {
+            var gravity = Gravity;
+            var forces = _globalForces.Count > 0 ? _globalForces.ToArray() : Array.Empty<IForce>();
+
+            void Process(IPhysicsBody body)
+            {
+                if (!body.IsActive)
+                    return;
+
+                if (body.BodyType == BodyType.Dynamic && !body.IsSleeping)
                 {
-                    if (body.BodyType != BodyType.Dynamic || !body.IsActive || body.IsSleeping)
-                        return;
-
                     body.ApplyForce(gravity * body.Mass);
 
                     foreach (var force in forces)
                     {
                         if (force.Enabled)
-                        {
-                            var f = force.Calculate(body.Position, body.Velocity, body.Mass);
-                            body.ApplyForce(f);
-                        }
+                            body.ApplyForce(force.Calculate(body.Position, body.Velocity, body.Mass));
                     }
-                });
-            }
-            finally { _bodiesLock.ExitReadLock(); }
-        }
+                }
 
-        private void IntegrateBodiesParallel(double dt)
-        {
-            _bodiesLock.EnterReadLock();
-            try
-            {
-                var bounds = WorldBounds;
-
-                Parallel.ForEach(_bodies, body =>
-                {
-                    if (!body.IsActive) return;
-
+                if (body is RigidBody rb)
+                    rb.IntegrateVelocity(dt);
+                else
                     body.Integrate(dt);
-
-                    // Check world bounds (optional deactivation)
-                    // if (bounds.HasValue && !bounds.Value.Contains(body.Position))
-                    //     body.IsActive = false;
-                });
             }
-            finally { _bodiesLock.ExitReadLock(); }
+
+            if (bodies.Length >= ParallelThreshold)
+                Parallel.ForEach(bodies, Process);
+            else
+                foreach (var body in bodies) Process(body);
         }
 
-        private void BuildSpatialGrid()
+        private void IntegratePositions(IPhysicsBody[] bodies, double dt)
         {
+            bool useCcd = UseCCD;
+
+            // Sequential: the continuous collision query reads other bodies' positions.
+            foreach (var body in bodies)
+            {
+                if (body is not RigidBody rb || !rb.IsActive || rb.IsSleeping || rb.BodyType == BodyType.Static)
+                    continue;
+
+                double stepTime = dt;
+                if (useCcd && rb.BodyType == BodyType.Dynamic)
+                    stepTime = ContinuousCollision.TimeOfImpact(rb, bodies, dt);
+
+                rb.IntegratePosition(stepTime);
+            }
+        }
+
+        #endregion
+
+        #region Broad Phase
+
+        private void BroadPhase(IPhysicsBody[] bodies)
+        {
+            foreach (var list in _spatialGrid.Values)
+            {
+                list.Clear();
+                _cellListPool.Push(list);
+            }
             _spatialGrid.Clear();
+            _largeBodies.Clear();
+            _pairs.Clear();
 
-            _bodiesLock.EnterReadLock();
-            try
+            int count = bodies.Length;
+            if (_cellMin.Length < count)
             {
-                for (int i = 0; i < _bodies.Count; i++)
-                {
-                    var body = _bodies[i];
-                    if (!body.IsActive) continue;
-
-                    var pos = body.Position;
-                    long cellKey = GetCellKey((float)pos.X, (float)pos.Y, (float)pos.Z);
-
-                    if (!_spatialGrid.TryGetValue(cellKey, out var list))
-                    {
-                        list = new List<int>(8);
-                        _spatialGrid[cellKey] = list;
-                    }
-                    list.Add(i);
-                }
+                _cellMin = new (int, int, int)[Math.Max(count, _cellMin.Length * 2)];
+                _cellMax = new (int, int, int)[_cellMin.Length];
             }
-            finally { _bodiesLock.ExitReadLock(); }
-        }
 
-        private static long GetCellKey(float x, float y, float z)
-        {
-            int cx = (int)MathF.Floor(x * InvCellSize);
-            int cy = (int)MathF.Floor(y * InvCellSize);
-            int cz = (int)MathF.Floor(z * InvCellSize);
-            return ((long)(cx & 0x1FFFFF) << 42) | ((long)(cy & 0x1FFFFF) << 21) | (cz & 0x1FFFFF);
-        }
+            double inv = 1.0 / BroadPhaseCellSize;
 
-        private static long GetCellKeyFromCoords(int cx, int cy, int cz)
-        {
-            return ((long)(cx & 0x1FFFFF) << 42) | ((long)(cy & 0x1FFFFF) << 21) | (cz & 0x1FFFFF);
-        }
-
-        private void DetectCollisionsParallel()
-        {
-            // Clear the concurrent bag
-            while (_collisionBag.TryTake(out _)) { }
-
-            _bodiesLock.EnterReadLock();
-            try
+            for (int i = 0; i < count; i++)
             {
-                var cells = _spatialGrid.ToArray();
-                var bodiesArray = _bodies.ToArray();
+                var body = bodies[i];
+                if (!body.IsActive)
+                    continue;
 
-                Parallel.ForEach(cells, cell =>
+                var box = body.BoundingBox;
+                double minX = Math.Floor(box.Min.X * inv), maxX = Math.Floor(box.Max.X * inv);
+                double minY = Math.Floor(box.Min.Y * inv), maxY = Math.Floor(box.Max.Y * inv);
+                double minZ = Math.Floor(box.Min.Z * inv), maxZ = Math.Floor(box.Max.Z * inv);
+
+                double cells = (maxX - minX + 1) * (maxY - minY + 1) * (maxZ - minZ + 1);
+
+                // Bodies that span many cells (ground planes, walls) or whose bounds are
+                // not finite are tested against everything instead of flooding the grid.
+                if (!(cells <= MaxCellsPerBody) || Math.Abs(minX) > CellCoordLimit || Math.Abs(maxX) > CellCoordLimit ||
+                    Math.Abs(minY) > CellCoordLimit || Math.Abs(maxY) > CellCoordLimit ||
+                    Math.Abs(minZ) > CellCoordLimit || Math.Abs(maxZ) > CellCoordLimit)
                 {
-                    var indices = cell.Value;
-                    long cellKey = cell.Key;
+                    if (double.IsNaN(cells))
+                        continue;
+                    _largeBodies.Add(i);
+                    continue;
+                }
 
-                    // Unpack cell coordinates
-                    int cx = (int)((cellKey >> 42) & 0x1FFFFF);
-                    int cy = (int)((cellKey >> 21) & 0x1FFFFF);
-                    int cz = (int)(cellKey & 0x1FFFFF);
-                    if (cx >= 0x100000) cx -= 0x200000;
-                    if (cy >= 0x100000) cy -= 0x200000;
-                    if (cz >= 0x100000) cz -= 0x200000;
+                var min = ((int)minX, (int)minY, (int)minZ);
+                var max = ((int)maxX, (int)maxY, (int)maxZ);
+                _cellMin[i] = min;
+                _cellMax[i] = max;
 
-                    // Check within cell
-                    for (int i = 0; i < indices.Count; i++)
+                for (int cx = min.Item1; cx <= max.Item1; cx++)
+                {
+                    for (int cy = min.Item2; cy <= max.Item2; cy++)
                     {
-                        for (int j = i + 1; j < indices.Count; j++)
+                        for (int cz = min.Item3; cz <= max.Item3; cz++)
                         {
-                            CheckCollisionPair(bodiesArray, indices[i], indices[j]);
-                        }
-                    }
-
-                    // Check neighboring cells (positive direction only to avoid duplicates)
-                    for (int dx = 0; dx <= 1; dx++)
-                    {
-                        for (int dy = 0; dy <= 1; dy++)
-                        {
-                            for (int dz = 0; dz <= 1; dz++)
+                            long key = GetCellKeyFromCoords(cx, cy, cz);
+                            if (!_spatialGrid.TryGetValue(key, out var list))
                             {
-                                if (dx == 0 && dy == 0 && dz == 0) continue;
-
-                                long neighborKey = GetCellKeyFromCoords(cx + dx, cy + dy, cz + dz);
-                                if (!_spatialGrid.TryGetValue(neighborKey, out var neighborIndices)) continue;
-
-                                foreach (var i in indices)
-                                {
-                                    foreach (var j in neighborIndices)
-                                    {
-                                        CheckCollisionPair(bodiesArray, i, j);
-                                    }
-                                }
+                                list = _cellListPool.Count > 0 ? _cellListPool.Pop() : new List<int>(8);
+                                _spatialGrid[key] = list;
                             }
+                            list.Add(i);
                         }
                     }
-                });
-
-                // Transfer from concurrent bag to list
-                while (_collisionBag.TryTake(out var collision))
-                {
-                    _collisions.Add(collision);
                 }
             }
-            finally { _bodiesLock.ExitReadLock(); }
+
+            // Pairs sharing a cell. Two bodies can share several cells, so a pair is
+            // reported only from the first cell their cell ranges have in common.
+            foreach (var cell in _spatialGrid)
+            {
+                var indices = cell.Value;
+                if (indices.Count < 2)
+                    continue;
+
+                long cellKey = cell.Key;
+
+                for (int a = 0; a < indices.Count; a++)
+                {
+                    int i = indices[a];
+                    for (int b = a + 1; b < indices.Count; b++)
+                    {
+                        int j = indices[b];
+
+                        var minI = _cellMin[i];
+                        var minJ = _cellMin[j];
+                        long firstShared = GetCellKeyFromCoords(
+                            Math.Max(minI.Item1, minJ.Item1),
+                            Math.Max(minI.Item2, minJ.Item2),
+                            Math.Max(minI.Item3, minJ.Item3));
+                        if (firstShared != cellKey)
+                            continue;
+
+                        AddPairIfOverlapping(bodies, i, j);
+                    }
+                }
+            }
+
+            // Large bodies against everything else.
+            for (int a = 0; a < _largeBodies.Count; a++)
+            {
+                int large = _largeBodies[a];
+                for (int k = 0; k < count; k++)
+                {
+                    if (k == large)
+                        continue;
+
+                    // Large-large pairs are visited from both sides: keep one.
+                    if (k < large && _largeBodies.Contains(k))
+                        continue;
+
+                    AddPairIfOverlapping(bodies, large, k);
+                }
+            }
         }
 
-        private void CheckCollisionPair(IPhysicsBody[] bodies, int i, int j)
+        private void AddPairIfOverlapping(IPhysicsBody[] bodies, int i, int j)
         {
             var bodyA = bodies[i];
             var bodyB = bodies[j];
 
-            if (!bodyA.IsActive || !bodyB.IsActive) return;
-            if (bodyA.BodyType == BodyType.Static && bodyB.BodyType == BodyType.Static) return;
+            if (!bodyA.IsActive || !bodyB.IsActive)
+                return;
 
-            var collision = CollisionDetector.Detect(bodyA, bodyB);
-            if (collision.HasCollision)
+            // At least one side must be able to react.
+            bool movingA = bodyA.BodyType == BodyType.Dynamic && !bodyA.IsSleeping;
+            bool movingB = bodyB.BodyType == BodyType.Dynamic && !bodyB.IsSleeping;
+            if (!movingA && !movingB)
             {
-                _collisionBag.Add(collision);
+                // A moving kinematic body must still be able to wake a sleeper.
+                bool sleeperAndMover =
+                    (bodyA.BodyType == BodyType.Dynamic && SleepManager.IsMovingKinematic(bodyB)) ||
+                    (bodyB.BodyType == BodyType.Dynamic && SleepManager.IsMovingKinematic(bodyA));
+                if (!sleeperAndMover)
+                    return;
             }
+
+            if (!bodyA.BoundingBox.Intersects(bodyB.BoundingBox))
+                return;
+
+            _pairs.Add(i < j ? (i, j) : (j, i));
         }
 
-        private void ResolveCollisions()
+        private static long GetCellKeyFromCoords(int cx, int cy, int cz)
         {
-            foreach (var collision in _collisions)
+            return ((long)(cx & 0x1FFFFF) << 42) | ((long)(cy & 0x1FFFFF) << 21) | (long)(cz & 0x1FFFFF);
+        }
+
+        private void NarrowPhase(IPhysicsBody[] bodies)
+        {
+            int pairCount = _pairs.Count;
+            if (pairCount == 0)
+                return;
+
+            if (pairCount >= ParallelThreshold)
             {
-                CollisionResolver.Resolve(collision, RestitutionThreshold);
-                OnCollision?.Invoke(collision);
+                // Results are written by pair index so the collision order (and with it
+                // the simulation) does not depend on thread scheduling.
+                if (_narrowPhaseResults.Length < pairCount)
+                    _narrowPhaseResults = new CollisionInfo[Math.Max(pairCount, _narrowPhaseResults.Length * 2)];
+
+                var results = _narrowPhaseResults;
+                var pairs = _pairs;
+                Parallel.For(0, pairCount, p =>
+                {
+                    var (i, j) = pairs[p];
+                    results[p] = CollisionDetector.Detect(bodies[i], bodies[j]);
+                });
+
+                for (int p = 0; p < pairCount; p++)
+                {
+                    if (results[p].HasCollision)
+                        _collisions.Add(results[p]);
+                    results[p] = default;
+                }
+            }
+            else
+            {
+                for (int p = 0; p < pairCount; p++)
+                {
+                    var (i, j) = _pairs[p];
+                    var collision = CollisionDetector.Detect(bodies[i], bodies[j]);
+                    if (collision.HasCollision)
+                        _collisions.Add(collision);
+                }
             }
         }
 
@@ -566,6 +780,7 @@ namespace Artemis.Simulation
             StepCount = 0;
             _accumulator = 0;
             _collisions.Clear();
+            _solver.ClearCache();
 
             _bodiesLock.EnterReadLock();
             try

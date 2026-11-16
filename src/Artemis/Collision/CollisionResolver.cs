@@ -10,8 +10,20 @@ namespace Artemis.Collision
     /// </summary>
     public static class CollisionResolver
     {
+        [ThreadStatic]
+        private static ContactSolver? _solver;
+
+        [ThreadStatic]
+        private static CollisionInfo[]? _single;
+
         /// <summary>
-        /// Resolves a collision between two bodies.
+        /// Resolves a single collision between two bodies: applies the normal and
+        /// friction impulses and pushes the bodies out of overlap.
+        /// <para>
+        /// This looks at one pair in isolation. To resolve all collisions of a step
+        /// together (required for stable stacking) use <see cref="ContactSolver"/>,
+        /// which is what the physics worlds do.
+        /// </para>
         /// </summary>
         /// <param name="collision">The collision information.</param>
         /// <param name="restitutionThreshold">Velocity threshold below which restitution is zero.</param>
@@ -27,210 +39,18 @@ namespace Artemis.Collision
             if (bodyA.BodyType != BodyType.Dynamic && bodyB.BodyType != BodyType.Dynamic)
                 return;
 
-            // Separate the bodies to resolve penetration
-            SeparateBodies(collision);
+            // An explicit resolve is an impact: sleeping bodies take part in it.
+            if (bodyA.BodyType == BodyType.Dynamic) bodyA.WakeUp();
+            if (bodyB.BodyType == BodyType.Dynamic) bodyB.WakeUp();
 
-            // Apply collision impulse
-            ApplyCollisionImpulse(collision, restitutionThreshold);
+            var solver = _solver ??= new ContactSolver { PositionCorrectionFactor = 0.4, WarmStarting = false };
+            var single = _single ??= new CollisionInfo[1];
 
-            // Apply friction impulse
-            ApplyFrictionImpulse(collision);
-
-            // Wake up sleeping bodies
-            bodyA.WakeUp();
-            bodyB.WakeUp();
-        }
-
-        /// <summary>
-        /// Separates overlapping bodies.
-        /// </summary>
-        private static void SeparateBodies(CollisionInfo collision)
-        {
-            var bodyA = collision.BodyA;
-            var bodyB = collision.BodyB;
-            var normal = collision.Normal;
-            double penetration = collision.Penetration;
-
-            // Small bias to prevent jitter
-            double slop = 0.001;
-            double percent = 0.8; // Usually 20-80%
-
-            double correction = Math.Max(penetration - slop, 0) * percent;
-
-            double totalInverseMass = bodyA.InverseMass + bodyB.InverseMass;
-            if (totalInverseMass <= PhysicsConstants.Epsilon)
-                return;
-
-            var correctionVector = normal * (correction / totalInverseMass);
-
-            if (bodyA.BodyType == BodyType.Dynamic)
-                bodyA.Position -= correctionVector * bodyA.InverseMass;
-
-            if (bodyB.BodyType == BodyType.Dynamic)
-                bodyB.Position += correctionVector * bodyB.InverseMass;
-        }
-
-        /// <summary>
-        /// Applies the collision impulse for velocity resolution.
-        /// </summary>
-        private static void ApplyCollisionImpulse(CollisionInfo collision, double restitutionThreshold)
-        {
-            var bodyA = collision.BodyA;
-            var bodyB = collision.BodyB;
-            var normal = collision.Normal;
-            var contactPoint = collision.ContactPoint;
-
-            // Get relative velocity at contact point
-            var rA = contactPoint - bodyA.Position;
-            var rB = contactPoint - bodyB.Position;
-
-            var velA = bodyA.Velocity + Vector3D.Cross(bodyA.AngularVelocity, rA);
-            var velB = bodyB.Velocity + Vector3D.Cross(bodyB.AngularVelocity, rB);
-            var relativeVelocity = velB - velA;
-
-            // Relative velocity along normal
-            double velAlongNormal = Vector3D.Dot(relativeVelocity, normal);
-
-            // Do not resolve if velocities are separating
-            if (velAlongNormal > 0)
-                return;
-
-            // Calculate restitution (average of materials)
-            double restitution = (bodyA.Material.Restitution + bodyB.Material.Restitution) * 0.5;
-
-            // Disable restitution for slow collisions to prevent jitter
-            if (Math.Abs(velAlongNormal) < restitutionThreshold)
-                restitution = 0;
-
-            // Calculate impulse scalar
-            double j = -(1 + restitution) * velAlongNormal;
-            j /= CalculateImpulseDenominator(bodyA, bodyB, rA, rB, normal);
-
-            // Apply impulse
-            var impulse = normal * j;
-
-            if (bodyA.BodyType == BodyType.Dynamic)
-            {
-                bodyA.ApplyImpulse(-impulse);
-                if (bodyA is RigidBody rbA)
-                {
-                    var angImpulse = Vector3D.Cross(rA, -impulse);
-                    bodyA.AngularVelocity += rbA.WorldInverseInertiaTensor * angImpulse;
-                }
-            }
-
-            if (bodyB.BodyType == BodyType.Dynamic)
-            {
-                bodyB.ApplyImpulse(impulse);
-                if (bodyB is RigidBody rbB)
-                {
-                    var angImpulse = Vector3D.Cross(rB, impulse);
-                    bodyB.AngularVelocity += rbB.WorldInverseInertiaTensor * angImpulse;
-                }
-            }
-        }
-
-        /// <summary>
-        /// Applies friction impulse.
-        /// </summary>
-        private static void ApplyFrictionImpulse(CollisionInfo collision)
-        {
-            var bodyA = collision.BodyA;
-            var bodyB = collision.BodyB;
-            var normal = collision.Normal;
-            var contactPoint = collision.ContactPoint;
-
-            var rA = contactPoint - bodyA.Position;
-            var rB = contactPoint - bodyB.Position;
-
-            var velA = bodyA.Velocity + Vector3D.Cross(bodyA.AngularVelocity, rA);
-            var velB = bodyB.Velocity + Vector3D.Cross(bodyB.AngularVelocity, rB);
-            var relativeVelocity = velB - velA;
-
-            // Get tangent velocity
-            var tangent = relativeVelocity - normal * Vector3D.Dot(relativeVelocity, normal);
-            double tangentSpeed = tangent.Magnitude;
-
-            if (tangentSpeed < PhysicsConstants.Epsilon)
-                return;
-
-            tangent = tangent / tangentSpeed;
-
-            // Calculate friction coefficients (geometric mean)
-            double staticFriction = Math.Sqrt(bodyA.Material.StaticFriction * bodyB.Material.StaticFriction);
-            double dynamicFriction = Math.Sqrt(bodyA.Material.DynamicFriction * bodyB.Material.DynamicFriction);
-
-            // Calculate tangent impulse
-            double jt = -tangentSpeed;
-            jt /= CalculateImpulseDenominator(bodyA, bodyB, rA, rB, tangent);
-
-            // Get normal impulse magnitude for Coulomb friction
-            double velAlongNormal = Vector3D.Dot(relativeVelocity, normal);
-            double jn = Math.Abs(velAlongNormal) /
-                       CalculateImpulseDenominator(bodyA, bodyB, rA, rB, normal);
-
-            // Coulomb's law: use static or dynamic friction
-            Vector3D frictionImpulse;
-            if (Math.Abs(jt) < jn * staticFriction)
-            {
-                // Static friction
-                frictionImpulse = tangent * jt;
-            }
-            else
-            {
-                // Dynamic friction
-                frictionImpulse = tangent * (-jn * dynamicFriction);
-            }
-
-            // Apply friction impulse
-            if (bodyA.BodyType == BodyType.Dynamic)
-            {
-                bodyA.ApplyImpulse(-frictionImpulse);
-                if (bodyA is RigidBody rbA)
-                {
-                    var angImpulse = Vector3D.Cross(rA, -frictionImpulse);
-                    bodyA.AngularVelocity += rbA.WorldInverseInertiaTensor * angImpulse;
-                }
-            }
-
-            if (bodyB.BodyType == BodyType.Dynamic)
-            {
-                bodyB.ApplyImpulse(frictionImpulse);
-                if (bodyB is RigidBody rbB)
-                {
-                    var angImpulse = Vector3D.Cross(rB, frictionImpulse);
-                    bodyB.AngularVelocity += rbB.WorldInverseInertiaTensor * angImpulse;
-                }
-            }
-        }
-
-        /// <summary>
-        /// Calculates the denominator for impulse computation.
-        /// </summary>
-        private static double CalculateImpulseDenominator(
-            IPhysicsBody bodyA,
-            IPhysicsBody bodyB,
-            Vector3D rA,
-            Vector3D rB,
-            Vector3D direction)
-        {
-            double denom = bodyA.InverseMass + bodyB.InverseMass;
-
-            if (bodyA is RigidBody rbA)
-            {
-                var crossA = Vector3D.Cross(rA, direction);
-                var rotA = rbA.WorldInverseInertiaTensor * crossA;
-                denom += Vector3D.Dot(Vector3D.Cross(rotA, rA), direction);
-            }
-
-            if (bodyB is RigidBody rbB)
-            {
-                var crossB = Vector3D.Cross(rB, direction);
-                var rotB = rbB.WorldInverseInertiaTensor * crossB;
-                denom += Vector3D.Dot(Vector3D.Cross(rotB, rB), direction);
-            }
-
-            return Math.Max(denom, PhysicsConstants.Epsilon);
+            solver.RestitutionThreshold = restitutionThreshold;
+            single[0] = collision;
+            solver.SolveVelocities(single);
+            solver.SolvePositions();
+            single[0] = default;
         }
 
         /// <summary>

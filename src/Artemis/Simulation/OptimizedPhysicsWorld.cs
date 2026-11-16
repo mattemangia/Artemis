@@ -28,7 +28,7 @@ namespace Artemis.Simulation
         #region Constants
 
         private const double SleepVelocityThreshold = 0.1;
-        private const double SleepAngularThreshold = 0.05;
+        private const double SleepAngularThreshold = 0.25;
         private const double SleepTimeRequired = 0.5;
         private const int DefaultSolverIterations = 8;
         private const int DefaultPositionIterations = 3;
@@ -49,8 +49,14 @@ namespace Artemis.Simulation
         private readonly IslandSolver _islandSolver;
         private readonly ListPool<CollisionInfo> _collisionListPool;
 
-        // Warm starting cache (stores impulses from previous frame)
-        private readonly Dictionary<(IPhysicsBody, IPhysicsBody), WarmStartData> _warmStartCache;
+        // Contact solving (with warm starting) and island sleeping
+        private readonly ContactSolver _solver = new();
+        private readonly SleepManager _sleep = new()
+        {
+            SleepVelocityThreshold = SleepVelocityThreshold,
+            SleepAngularVelocityThreshold = SleepAngularThreshold,
+            SleepTimeThreshold = SleepTimeRequired
+        };
 
         // Threading
         private readonly int _threadCount;
@@ -59,17 +65,6 @@ namespace Artemis.Simulation
         // Timing
         private double _accumulator;
         private readonly Stopwatch _profileTimer;
-
-        #endregion
-
-        #region Nested Types
-
-        private struct WarmStartData
-        {
-            public Vector3D NormalImpulse;
-            public Vector3D TangentImpulse;
-            public Vector3D ContactPoint;
-        }
 
         #endregion
 
@@ -178,7 +173,6 @@ namespace Artemis.Simulation
             _spatialHash = new SpatialHash(spatialCellSize);
             _islandSolver = new IslandSolver(10000);
             _collisionListPool = new ListPool<CollisionInfo>(64);
-            _warmStartCache = new Dictionary<(IPhysicsBody, IPhysicsBody), WarmStartData>(256);
 
             _threadCount = threadCount > 0 ? threadCount : Environment.ProcessorCount;
             _parallelOptions = new ParallelOptions
@@ -223,7 +217,19 @@ namespace Artemis.Simulation
         public bool RemoveBody(IPhysicsBody body)
         {
             _dynamicBodies.Remove(body);
-            return _bodies.Remove(body);
+            bool removed = _bodies.Remove(body);
+
+            // Whatever was resting on the removed body has lost its support.
+            if (removed)
+            {
+                foreach (var other in _bodies)
+                {
+                    if (other.IsSleeping)
+                        other.WakeUp();
+                }
+            }
+
+            return removed;
         }
 
         /// <summary>
@@ -242,7 +248,7 @@ namespace Artemis.Simulation
             _bodies.Clear();
             _dynamicBodies.Clear();
             _spatialHash.Clear();
-            _warmStartCache.Clear();
+            _solver.ClearCache();
         }
 
         /// <summary>
@@ -330,6 +336,7 @@ namespace Artemis.Simulation
 
             // 2. Integrate velocities
             IntegrateVelocities(dt);
+
             IntegrationTimeMs = _profileTimer.Elapsed.TotalMilliseconds;
 
             // 3. Broad phase collision detection
@@ -342,8 +349,10 @@ namespace Artemis.Simulation
             NarrowPhase();
             NarrowPhaseTimeMs = _profileTimer.Elapsed.TotalMilliseconds;
 
-            // 5. Build islands
+            // 5. Build islands and wake the ones that are being disturbed
             _islandSolver.BuildIslands(_bodies, _collisions);
+            _sleep.BuildIslands(_bodies, _collisions);
+            _sleep.WakeDisturbedIslands(_bodies, _collisions);
 
             // 6. Solve constraints
             _profileTimer.Restart();
@@ -354,7 +363,7 @@ namespace Artemis.Simulation
             IntegratePositions(dt);
 
             // 8. Update sleeping
-            UpdateSleeping(dt);
+            _sleep.UpdateSleeping(_bodies, dt);
 
             // 9. Fire collision events
             foreach (var collision in _collisions)
@@ -375,16 +384,16 @@ namespace Artemis.Simulation
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ApplyForces(double dt)
         {
-            if (UseMultiThreading && _dynamicBodies.Count > 100)
+            if (UseMultiThreading && _bodies.Count > 100)
             {
-                Parallel.ForEach(_dynamicBodies, _parallelOptions, body =>
+                Parallel.ForEach(_bodies, _parallelOptions, body =>
                 {
                     ApplyForcesToBody(body);
                 });
             }
             else
             {
-                foreach (var body in _dynamicBodies)
+                foreach (var body in _bodies)
                 {
                     ApplyForcesToBody(body);
                 }
@@ -394,7 +403,9 @@ namespace Artemis.Simulation
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ApplyForcesToBody(IPhysicsBody body)
         {
-            if (!body.IsActive || body.IsSleeping)
+            // The body type can change after a body was added, so it is checked here
+            // rather than relying on the list the body was sorted into.
+            if (body.BodyType != BodyType.Dynamic || !body.IsActive || body.IsSleeping)
                 return;
 
             // Apply gravity
@@ -414,9 +425,9 @@ namespace Artemis.Simulation
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void IntegrateVelocities(double dt)
         {
-            if (UseMultiThreading && _dynamicBodies.Count > 100)
+            if (UseMultiThreading && _bodies.Count > 100)
             {
-                Parallel.ForEach(_dynamicBodies, _parallelOptions, body =>
+                Parallel.ForEach(_bodies, _parallelOptions, body =>
                 {
                     if (body.IsActive && !body.IsSleeping)
                     {
@@ -426,7 +437,7 @@ namespace Artemis.Simulation
             }
             else
             {
-                foreach (var body in _dynamicBodies)
+                foreach (var body in _bodies)
                 {
                     if (body.IsActive && !body.IsSleeping)
                     {
@@ -439,16 +450,11 @@ namespace Artemis.Simulation
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void IntegrateVelocity(IPhysicsBody body, double dt)
         {
+            // Forces -> velocities only. Positions follow after the contact solver.
             if (body is RigidBody rb)
-            {
-                // Semi-implicit Euler for velocity
-                rb.Velocity += rb.Acceleration * dt;
-                rb.AngularVelocity += rb.AngularAcceleration * dt;
-
-                // Apply damping
-                rb.Velocity *= Math.Pow(1.0 - rb.LinearDamping, dt);
-                rb.AngularVelocity *= Math.Pow(1.0 - rb.AngularDamping, dt);
-            }
+                rb.IntegrateVelocity(dt);
+            else
+                body.Integrate(dt);
         }
 
         private void BroadPhase()
@@ -496,259 +502,31 @@ namespace Artemis.Simulation
 
         private void SolveConstraints(double dt)
         {
-            if (UseMultiThreading)
-            {
-                // Solve islands in parallel
-                _islandSolver.SolveParallel(island =>
-                {
-                    SolveIsland(island, dt);
-                }, _threadCount);
-            }
-            else
-            {
-                _islandSolver.SolveSequential(island =>
-                {
-                    SolveIsland(island, dt);
-                });
-            }
+            _solver.VelocityIterations = SolverIterations;
+            _solver.PositionIterations = PositionIterations;
+            _solver.RestitutionThreshold = RestitutionThreshold;
+            _solver.WarmStarting = UseWarmStarting;
+            _solver.SolveVelocities(_collisions);
         }
 
-        private void SolveIsland(IslandSolver.Island island, double dt)
-        {
-            // Velocity solver iterations
-            for (int i = 0; i < SolverIterations; i++)
-            {
-                foreach (var collision in island.Collisions)
-                {
-                    SolveVelocityConstraint(collision, dt);
-                }
-            }
-
-            // Position solver iterations
-            for (int i = 0; i < PositionIterations; i++)
-            {
-                foreach (var collision in island.Collisions)
-                {
-                    SolvePositionConstraint(collision);
-                }
-            }
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void SolveVelocityConstraint(CollisionInfo collision, double dt)
-        {
-            var bodyA = collision.BodyA as RigidBody;
-            var bodyB = collision.BodyB as RigidBody;
-            if (bodyA == null && bodyB == null) return;
-
-            // Get masses
-            double invMassA = bodyA?.BodyType == BodyType.Dynamic ? 1.0 / bodyA.Mass : 0;
-            double invMassB = bodyB?.BodyType == BodyType.Dynamic ? 1.0 / bodyB.Mass : 0;
-
-            if (invMassA == 0 && invMassB == 0) return;
-
-            // Contact point relative to centers
-            var rA = collision.ContactPoint - (bodyA?.Position ?? collision.ContactPoint);
-            var rB = collision.ContactPoint - (bodyB?.Position ?? collision.ContactPoint);
-
-            // Relative velocity at contact
-            var vA = (bodyA?.Velocity ?? Vector3D.Zero) +
-                     Vector3D.Cross(bodyA?.AngularVelocity ?? Vector3D.Zero, rA);
-            var vB = (bodyB?.Velocity ?? Vector3D.Zero) +
-                     Vector3D.Cross(bodyB?.AngularVelocity ?? Vector3D.Zero, rB);
-            var relVel = vB - vA;
-
-            // Normal velocity
-            double normalVel = Vector3D.Dot(relVel, collision.Normal);
-
-            // Don't resolve if separating
-            if (normalVel > 0) return;
-
-            // Restitution
-            double restitution = Math.Min(
-                bodyA?.Material.Restitution ?? 0.5,
-                bodyB?.Material.Restitution ?? 0.5
-            );
-
-            // Only apply restitution above threshold
-            if (Math.Abs(normalVel) < RestitutionThreshold)
-            {
-                restitution = 0;
-            }
-
-            // Effective mass
-            var rAxN = Vector3D.Cross(rA, collision.Normal);
-            var rBxN = Vector3D.Cross(rB, collision.Normal);
-
-            double kNormal = invMassA + invMassB;
-            if (bodyA != null)
-            {
-                kNormal += Vector3D.Dot(
-                    Vector3D.Cross(bodyA.InverseInertiaTensorWorld * rAxN, rA),
-                    collision.Normal);
-            }
-            if (bodyB != null)
-            {
-                kNormal += Vector3D.Dot(
-                    Vector3D.Cross(bodyB.InverseInertiaTensorWorld * rBxN, rB),
-                    collision.Normal);
-            }
-
-            // Normal impulse
-            double j = -(1 + restitution) * normalVel / kNormal;
-
-            // Warm starting
-            var pairKey = (collision.BodyA, collision.BodyB);
-            if (UseWarmStarting && _warmStartCache.TryGetValue(pairKey, out var warmStart))
-            {
-                // Apply cached impulse scaled down
-                var warmImpulse = warmStart.NormalImpulse * 0.8;
-                if (bodyA != null && bodyA.BodyType == BodyType.Dynamic)
-                {
-                    bodyA.Velocity -= warmImpulse * invMassA;
-                    bodyA.AngularVelocity -= bodyA.InverseInertiaTensorWorld * Vector3D.Cross(rA, warmImpulse);
-                }
-                if (bodyB != null && bodyB.BodyType == BodyType.Dynamic)
-                {
-                    bodyB.Velocity += warmImpulse * invMassB;
-                    bodyB.AngularVelocity += bodyB.InverseInertiaTensorWorld * Vector3D.Cross(rB, warmImpulse);
-                }
-            }
-
-            // Apply normal impulse
-            var impulse = collision.Normal * j;
-
-            if (bodyA != null && bodyA.BodyType == BodyType.Dynamic)
-            {
-                bodyA.Velocity -= impulse * invMassA;
-                bodyA.AngularVelocity -= bodyA.InverseInertiaTensorWorld * Vector3D.Cross(rA, impulse);
-            }
-            if (bodyB != null && bodyB.BodyType == BodyType.Dynamic)
-            {
-                bodyB.Velocity += impulse * invMassB;
-                bodyB.AngularVelocity += bodyB.InverseInertiaTensorWorld * Vector3D.Cross(rB, impulse);
-            }
-
-            // Friction
-            var tangent = relVel - collision.Normal * normalVel;
-            double tangentLen = tangent.Length;
-            if (tangentLen > 1e-6)
-            {
-                tangent /= tangentLen;
-
-                double friction = Math.Sqrt(
-                    (bodyA?.Material.DynamicFriction ?? 0.5) *
-                    (bodyB?.Material.DynamicFriction ?? 0.5)
-                );
-
-                double jt = -Vector3D.Dot(relVel, tangent) / kNormal;
-                jt = Math.Clamp(jt, -Math.Abs(j) * friction, Math.Abs(j) * friction);
-
-                var frictionImpulse = tangent * jt;
-
-                if (bodyA != null && bodyA.BodyType == BodyType.Dynamic)
-                {
-                    bodyA.Velocity -= frictionImpulse * invMassA;
-                }
-                if (bodyB != null && bodyB.BodyType == BodyType.Dynamic)
-                {
-                    bodyB.Velocity += frictionImpulse * invMassB;
-                }
-            }
-
-            // Store for warm starting
-            _warmStartCache[pairKey] = new WarmStartData
-            {
-                NormalImpulse = impulse,
-                ContactPoint = collision.ContactPoint
-            };
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void SolvePositionConstraint(CollisionInfo collision)
-        {
-            if (collision.Penetration < 0.001)
-                return;
-
-            var bodyA = collision.BodyA as RigidBody;
-            var bodyB = collision.BodyB as RigidBody;
-
-            double invMassA = bodyA?.BodyType == BodyType.Dynamic ? 1.0 / bodyA.Mass : 0;
-            double invMassB = bodyB?.BodyType == BodyType.Dynamic ? 1.0 / bodyB.Mass : 0;
-
-            if (invMassA == 0 && invMassB == 0) return;
-
-            // Baumgarte stabilization
-            const double baumgarte = 0.2;
-            const double slop = 0.005;
-
-            double correction = baumgarte * Math.Max(collision.Penetration - slop, 0) /
-                               (invMassA + invMassB);
-
-            var correctionVec = collision.Normal * correction;
-
-            if (bodyA != null && bodyA.BodyType == BodyType.Dynamic)
-            {
-                bodyA.Position -= correctionVec * invMassA;
-            }
-            if (bodyB != null && bodyB.BodyType == BodyType.Dynamic)
-            {
-                bodyB.Position += correctionVec * invMassB;
-            }
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void IntegratePositions(double dt)
         {
-            foreach (var body in _dynamicBodies)
+            bool useCcd = UseCCD;
+
+            foreach (var body in _bodies)
             {
-                if (!body.IsActive || body.IsSleeping)
+                if (body is not RigidBody rb || !rb.IsActive || rb.IsSleeping || rb.BodyType == BodyType.Static)
                     continue;
 
-                if (body is RigidBody rb)
-                {
-                    rb.Position += rb.Velocity * dt;
+                double stepTime = dt;
+                if (useCcd && rb.BodyType == BodyType.Dynamic)
+                    stepTime = ContinuousCollision.TimeOfImpact(rb, _bodies, dt);
 
-                    // Quaternion integration for rotation
-                    var w = new Quaternion(0, rb.AngularVelocity.X, rb.AngularVelocity.Y, rb.AngularVelocity.Z);
-                    var qDot = 0.5 * w * rb.Rotation;
-                    rb.Rotation = (rb.Rotation + qDot * dt).Normalized;
-
-                    // Clear forces
-                    rb.ClearForces();
-                }
+                rb.IntegratePosition(stepTime);
             }
-        }
 
-        private void UpdateSleeping(double dt)
-        {
-            foreach (var body in _dynamicBodies)
-            {
-                if (!body.IsActive) continue;
-
-                if (body is RigidBody rb)
-                {
-                    double linearSpeed = rb.Velocity.Length;
-                    double angularSpeed = rb.AngularVelocity.Length;
-
-                    if (linearSpeed < SleepVelocityThreshold && angularSpeed < SleepAngularThreshold)
-                    {
-                        rb.SleepTimer += dt;
-                        if (rb.SleepTimer >= SleepTimeRequired)
-                        {
-                            rb.Sleep();
-                        }
-                    }
-                    else
-                    {
-                        rb.SleepTimer = 0;
-                        if (rb.IsSleeping)
-                        {
-                            rb.WakeUp();
-                        }
-                    }
-                }
-            }
+            // Remove the overlap that is left once the bodies have moved.
+            _solver.SolvePositions();
         }
 
         #endregion
@@ -756,87 +534,60 @@ namespace Artemis.Simulation
         #region CCD (Continuous Collision Detection)
 
         /// <summary>
-        /// Performs continuous collision detection for fast-moving objects.
+        /// Sweeps a body along a displacement and reports the first body it would hit.
+        /// The world uses the same test internally when <see cref="UseCCD"/> is enabled.
         /// </summary>
+        /// <param name="body">The moving body.</param>
+        /// <param name="displacement">World-space displacement to test.</param>
+        /// <param name="firstHit">Information about the first hit, if any.</param>
         public bool RaycastCCD(IPhysicsBody body, Vector3D displacement, out CollisionInfo firstHit)
         {
             firstHit = default;
-            if (!UseCCD) return false;
 
-            double speed = displacement.Length;
-            if (speed < body.BoundingBox.Size.Length * 0.5)
+            double distance = displacement.Magnitude;
+            if (distance < PhysicsConstants.Epsilon)
+                return false;
+
+            var direction = displacement / distance;
+            double radius = 0;
+            if (body is RigidBody rb)
             {
-                return false; // Not moving fast enough
+                radius = rb.ShapeType == CollisionShapeType.Sphere
+                    ? rb.Radius
+                    : Math.Min(rb.HalfExtents.X, Math.Min(rb.HalfExtents.Y, rb.HalfExtents.Z));
             }
 
-            var direction = displacement / speed;
+            IPhysicsBody? hitBody = null;
+            double hitTravel = distance;
+            var start = body.Position;
 
-            // Expand AABB along motion path
-            var sweepAABB = body.BoundingBox;
-            var endAABB = new AABB(
-                body.BoundingBox.Min + displacement,
-                body.BoundingBox.Max + displacement
-            );
-            sweepAABB = sweepAABB.Union(endAABB);
-
-            // Query spatial hash for potential hits
-            var candidates = _spatialHash.Query(sweepAABB);
-
-            double minT = double.MaxValue;
-
-            foreach (var other in candidates)
+            foreach (var other in _bodies)
             {
-                if (other == body || !other.IsActive) continue;
+                if (ReferenceEquals(other, body) || !other.IsActive)
+                    continue;
 
-                // Simple sphere-cast for CCD
-                if (RaycastBody(body.Position, direction, speed, other, out double t, out var hitInfo))
+                // Conservative advancement of the body's core sphere.
+                double travelled = 0;
+                for (int iteration = 0; iteration < 32 && travelled < hitTravel; iteration++)
                 {
-                    if (t < minT)
+                    double gap = CollisionDetector.DistanceToBody(start + direction * travelled, other) - radius;
+                    if (gap <= 1e-4)
                     {
-                        minT = t;
-                        firstHit = hitInfo;
+                        if (iteration > 0)
+                        {
+                            hitTravel = travelled;
+                            hitBody = other;
+                        }
+                        break;
                     }
+                    travelled += gap;
                 }
             }
 
-            return minT < double.MaxValue;
-        }
+            if (hitBody == null)
+                return false;
 
-        private bool RaycastBody(Vector3D origin, Vector3D direction, double maxDist,
-            IPhysicsBody target, out double t, out CollisionInfo collision)
-        {
-            t = double.MaxValue;
-            collision = default;
-
-            // Simplified: just use AABB for now
-            var aabb = target.BoundingBox;
-
-            double tmin = 0;
-            double tmax = maxDist;
-
-            for (int i = 0; i < 3; i++)
-            {
-                double o = i == 0 ? origin.X : (i == 1 ? origin.Y : origin.Z);
-                double d = i == 0 ? direction.X : (i == 1 ? direction.Y : direction.Z);
-                double min = i == 0 ? aabb.Min.X : (i == 1 ? aabb.Min.Y : aabb.Min.Z);
-                double max = i == 0 ? aabb.Max.X : (i == 1 ? aabb.Max.Y : aabb.Max.Z);
-
-                if (Math.Abs(d) < 1e-8)
-                {
-                    if (o < min || o > max) return false;
-                }
-                else
-                {
-                    double t1 = (min - o) / d;
-                    double t2 = (max - o) / d;
-                    if (t1 > t2) (t1, t2) = (t2, t1);
-                    tmin = Math.Max(tmin, t1);
-                    tmax = Math.Min(tmax, t2);
-                    if (tmin > tmax) return false;
-                }
-            }
-
-            t = tmin;
+            firstHit = CollisionInfo.Create(body, hitBody, direction, 0, start + direction * (hitTravel + radius));
             return true;
         }
 
@@ -934,7 +685,7 @@ namespace Artemis.Simulation
             StepCount = 0;
             _accumulator = 0;
             _collisions.Clear();
-            _warmStartCache.Clear();
+            _solver.ClearCache();
 
             foreach (var body in _bodies)
             {

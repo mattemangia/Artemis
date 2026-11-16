@@ -25,6 +25,11 @@ namespace Artemis.Bodies
         private Matrix3x3 _worldInverseInertiaTensor;
         private AABB _boundingBox;
         private double _sleepTimer;
+        private BodyType _bodyType = BodyType.Dynamic;
+        private CollisionShapeType _shapeType = CollisionShapeType.Sphere;
+        private Vector3D _halfExtents = new(0.5, 0.5, 0.5);
+        private double _radius = 0.5;
+        private bool _hasCustomInertia;
 
         #endregion
 
@@ -34,7 +39,27 @@ namespace Artemis.Bodies
         public string Id { get; }
 
         /// <inheritdoc/>
-        public BodyType BodyType { get; set; } = BodyType.Dynamic;
+        public BodyType BodyType
+        {
+            get => _bodyType;
+            set
+            {
+                if (_bodyType == value)
+                    return;
+
+                _bodyType = value;
+                if (value == BodyType.Static)
+                {
+                    _velocity = Vector3D.Zero;
+                    _angularVelocity = Vector3D.Zero;
+                }
+
+                // Only dynamic bodies respond to impulses, so the world-space
+                // inverse inertia has to follow the body type.
+                UpdateWorldInertiaTensor();
+                WakeUp();
+            }
+        }
 
         /// <summary>
         /// Gets or sets whether the body is static (alias for BodyType).
@@ -56,7 +81,8 @@ namespace Artemis.Bodies
             {
                 _position = value;
                 UpdateBoundingBox();
-                WakeUp();
+                if (IsSleeping)
+                    WakeUp();
             }
         }
 
@@ -67,7 +93,7 @@ namespace Artemis.Bodies
             set
             {
                 _velocity = value;
-                if (_velocity.MagnitudeSquared > PhysicsConstants.Epsilon)
+                if (IsSleeping && _velocity.MagnitudeSquared > PhysicsConstants.Epsilon)
                     WakeUp();
             }
         }
@@ -88,7 +114,8 @@ namespace Artemis.Bodies
                 _rotation = value.Normalized;
                 UpdateWorldInertiaTensor();
                 UpdateBoundingBox();
-                WakeUp();
+                if (IsSleeping)
+                    WakeUp();
             }
         }
 
@@ -99,7 +126,7 @@ namespace Artemis.Bodies
             set
             {
                 _angularVelocity = value;
-                if (_angularVelocity.MagnitudeSquared > PhysicsConstants.Epsilon)
+                if (IsSleeping && _angularVelocity.MagnitudeSquared > PhysicsConstants.Epsilon)
                     WakeUp();
             }
         }
@@ -111,13 +138,13 @@ namespace Artemis.Bodies
             set
             {
                 _mass = Math.Max(value, PhysicsConstants.Epsilon);
-                _inverseMass = BodyType == BodyType.Static ? 0 : 1.0 / _mass;
+                _inverseMass = 1.0 / _mass;
                 UpdateInertiaTensor();
             }
         }
 
         /// <inheritdoc/>
-        public double InverseMass => BodyType == BodyType.Static ? 0 : _inverseMass;
+        public double InverseMass => _bodyType == BodyType.Dynamic ? _inverseMass : 0;
 
         /// <inheritdoc/>
         public PhysicsMaterial Material { get; set; }
@@ -153,6 +180,7 @@ namespace Artemis.Bodies
             {
                 _inertiaTensor = value;
                 _inverseInertiaTensor = value.Inverse;
+                _hasCustomInertia = true;
                 UpdateWorldInertiaTensor();
             }
         }
@@ -184,17 +212,41 @@ namespace Artemis.Bodies
         /// <summary>
         /// Gets or sets the half-extents (for box collision shape).
         /// </summary>
-        public Vector3D HalfExtents { get; set; } = new(0.5, 0.5, 0.5);
+        public Vector3D HalfExtents
+        {
+            get => _halfExtents;
+            set
+            {
+                _halfExtents = value;
+                OnShapeChanged();
+            }
+        }
 
         /// <summary>
         /// Gets or sets the radius (for sphere collision shape).
         /// </summary>
-        public double Radius { get; set; } = 0.5;
+        public double Radius
+        {
+            get => _radius;
+            set
+            {
+                _radius = value;
+                OnShapeChanged();
+            }
+        }
 
         /// <summary>
         /// Gets or sets the collision shape type.
         /// </summary>
-        public CollisionShapeType ShapeType { get; set; } = CollisionShapeType.Sphere;
+        public CollisionShapeType ShapeType
+        {
+            get => _shapeType;
+            set
+            {
+                _shapeType = value;
+                OnShapeChanged();
+            }
+        }
 
         #endregion
 
@@ -215,9 +267,7 @@ namespace Artemis.Bodies
             _mass = 1.0;
             _inverseMass = 1.0;
             Material = new PhysicsMaterial();
-            _inertiaTensor = Matrix3x3.Identity;
-            _inverseInertiaTensor = Matrix3x3.Identity;
-            _worldInverseInertiaTensor = Matrix3x3.Identity;
+            UpdateInertiaTensor();
             UpdateBoundingBox();
         }
 
@@ -242,17 +292,18 @@ namespace Artemis.Bodies
         /// <inheritdoc/>
         public void ApplyForce(Vector3D force)
         {
-            if (BodyType == BodyType.Static)
+            if (_bodyType != BodyType.Dynamic)
                 return;
 
             _accumulatedForce += force;
-            WakeUp();
+            if (IsSleeping)
+                WakeUp();
         }
 
         /// <inheritdoc/>
         public void ApplyForceAtPoint(Vector3D force, Vector3D point)
         {
-            if (BodyType == BodyType.Static)
+            if (_bodyType != BodyType.Dynamic)
                 return;
 
             _accumulatedForce += force;
@@ -260,13 +311,14 @@ namespace Artemis.Bodies
             // Calculate torque: τ = r × F
             var r = point - _position;
             _accumulatedTorque += Vector3D.Cross(r, force);
-            WakeUp();
+            if (IsSleeping)
+                WakeUp();
         }
 
         /// <inheritdoc/>
         public void ApplyImpulse(Vector3D impulse)
         {
-            if (BodyType == BodyType.Static)
+            if (_bodyType != BodyType.Dynamic)
                 return;
 
             _velocity += impulse * _inverseMass;
@@ -276,7 +328,7 @@ namespace Artemis.Bodies
         /// <inheritdoc/>
         public void ApplyImpulseAtPoint(Vector3D impulse, Vector3D point)
         {
-            if (BodyType == BodyType.Static)
+            if (_bodyType != BodyType.Dynamic)
                 return;
 
             _velocity += impulse * _inverseMass;
@@ -290,11 +342,12 @@ namespace Artemis.Bodies
         /// <inheritdoc/>
         public void ApplyTorque(Vector3D torque)
         {
-            if (BodyType == BodyType.Static)
+            if (_bodyType != BodyType.Dynamic)
                 return;
 
             _accumulatedTorque += torque;
-            WakeUp();
+            if (IsSleeping)
+                WakeUp();
         }
 
         /// <inheritdoc/>
@@ -307,54 +360,141 @@ namespace Artemis.Bodies
         /// <inheritdoc/>
         public void Integrate(double deltaTime)
         {
-            if (BodyType == BodyType.Static || !IsActive || IsSleeping)
+            if (_bodyType == BodyType.Static || !IsActive || IsSleeping)
                 return;
 
-            // Calculate acceleration from accumulated forces
-            _acceleration = _accumulatedForce * _inverseMass;
+            IntegrateVelocity(deltaTime);
+            IntegratePosition(deltaTime);
+            CheckSleep(deltaTime);
+        }
 
-            // Update linear velocity (semi-implicit Euler)
-            _velocity += _acceleration * deltaTime;
+        /// <summary>
+        /// First half of a simulation step: turns the accumulated forces and torques
+        /// into velocity changes (semi-implicit Euler), applies damping and clears the
+        /// accumulators. Positions are left untouched so that a contact solver can
+        /// correct the velocities before they are integrated.
+        /// </summary>
+        /// <param name="deltaTime">Time step in seconds.</param>
+        public void IntegrateVelocity(double deltaTime)
+        {
+            if (!IsActive || IsSleeping)
+                return;
 
-            // Apply linear damping
-            _velocity *= Math.Pow(1.0 - LinearDamping, deltaTime);
-
-            // Update position
-            _position += _velocity * deltaTime;
-
-            // Calculate angular acceleration
-            var angularAcceleration = _worldInverseInertiaTensor * _accumulatedTorque;
-
-            // Update angular velocity
-            _angularVelocity += angularAcceleration * deltaTime;
-
-            // Apply angular damping
-            _angularVelocity *= Math.Pow(1.0 - AngularDamping, deltaTime);
-
-            // Update rotation
-            if (_angularVelocity.MagnitudeSquared > PhysicsConstants.Epsilon)
+            if (_bodyType != BodyType.Dynamic)
             {
-                var angularDelta = _angularVelocity * deltaTime;
-                double angle = angularDelta.Magnitude;
-                if (angle > PhysicsConstants.Epsilon)
-                {
-                    var axis = angularDelta / angle;
-                    var deltaRotation = Quaternion.FromAxisAngle(axis, angle);
-                    _rotation = (deltaRotation * _rotation).Normalized;
-                }
+                // Static and kinematic bodies are not driven by forces.
+                _acceleration = Vector3D.Zero;
+                ClearForces();
+                return;
             }
 
-            // Update world-space inertia tensor
-            UpdateWorldInertiaTensor();
+            _acceleration = _accumulatedForce * _inverseMass;
+            _velocity += _acceleration * deltaTime;
+            _velocity *= Math.Pow(1.0 - LinearDamping, deltaTime);
 
-            // Update bounding box
-            UpdateBoundingBox();
+            _angularVelocity += (_worldInverseInertiaTensor * _accumulatedTorque) * deltaTime;
+            _angularVelocity *= Math.Pow(1.0 - AngularDamping, deltaTime);
 
-            // Check for sleep
-            CheckSleep(deltaTime);
-
-            // Clear forces for next frame
             ClearForces();
+        }
+
+        /// <summary>
+        /// Second half of a simulation step: advances position and orientation using
+        /// the current velocities.
+        /// </summary>
+        /// <param name="deltaTime">Time step in seconds.</param>
+        public void IntegratePosition(double deltaTime)
+        {
+            if (_bodyType == BodyType.Static || !IsActive || IsSleeping)
+                return;
+
+            _position += _velocity * deltaTime;
+
+            if (_angularVelocity.MagnitudeSquared > PhysicsConstants.Epsilon)
+            {
+                if (_bodyType == BodyType.Dynamic)
+                    IntegrateFreeRotation(deltaTime);
+                else
+                    Rotate(_angularVelocity * deltaTime);
+
+                UpdateWorldInertiaTensor();
+            }
+
+            UpdateBoundingBox();
+        }
+
+        /// <summary>
+        /// Torque-free rotation of a rigid body. The angular velocity is advanced in
+        /// the body frame with Euler's equations, I dw/dt = (I w) x w, using RK4. This
+        /// keeps the gyroscopic coupling between the axes, so asymmetric bodies tumble
+        /// and precess correctly while angular momentum and energy stay (very nearly)
+        /// constant - a plain "w stays constant in world space" update conserves neither.
+        /// </summary>
+        private void IntegrateFreeRotation(double deltaTime)
+        {
+            var toLocal = _rotation.Conjugate;
+            var w = toLocal * _angularVelocity;
+
+            // Keep the rotation per sub-step small enough for RK4 to stay accurate.
+            double anglePerStep = w.Magnitude * deltaTime;
+            int subSteps = Math.Min(16, Math.Max(1, (int)Math.Ceiling(anglePerStep / 0.25)));
+            double h = deltaTime / subSteps;
+
+            for (int i = 0; i < subSteps; i++)
+            {
+                var k1 = EulerRate(w);
+                var k2 = EulerRate(w + k1 * (0.5 * h));
+                var k3 = EulerRate(w + k2 * (0.5 * h));
+                var k4 = EulerRate(w + k3 * h);
+                var next = w + (k1 + (k2 + k3) * 2.0 + k4) * (h / 6.0);
+
+                // Orientation follows the mean body-frame angular velocity of the sub-step.
+                var localDelta = (w + next) * (0.5 * h);
+                double angle = localDelta.Magnitude;
+                if (angle > PhysicsConstants.Epsilon)
+                    _rotation = (_rotation * Quaternion.FromAxisAngle(localDelta / angle, angle)).Normalized;
+
+                w = next;
+            }
+
+            _angularVelocity = _rotation * w;
+        }
+
+        private Vector3D EulerRate(Vector3D w)
+            => _inverseInertiaTensor * Vector3D.Cross(_inertiaTensor * w, w);
+
+        private void Rotate(Vector3D angularDelta)
+        {
+            double angle = angularDelta.Magnitude;
+            if (angle > PhysicsConstants.Epsilon)
+                _rotation = (Quaternion.FromAxisAngle(angularDelta / angle, angle) * _rotation).Normalized;
+        }
+
+        /// <summary>
+        /// Writes solver results back without touching the sleep state.
+        /// </summary>
+        internal void SetVelocities(Vector3D linear, Vector3D angular)
+        {
+            _velocity = linear;
+            _angularVelocity = angular;
+        }
+
+        /// <summary>
+        /// Moves and turns the body without waking it or resetting its sleep timer.
+        /// </summary>
+        /// <param name="translation">World-space offset.</param>
+        /// <param name="rotation">World-space rotation vector (axis times angle, radians).</param>
+        internal void ApplyPositionCorrection(Vector3D translation, Vector3D rotation)
+        {
+            _position += translation;
+
+            if (rotation.MagnitudeSquared > PhysicsConstants.Epsilon * PhysicsConstants.Epsilon)
+            {
+                Rotate(rotation);
+                UpdateWorldInertiaTensor();
+            }
+
+            UpdateBoundingBox();
         }
 
         /// <inheritdoc/>
@@ -410,8 +550,18 @@ namespace Artemis.Bodies
             }
         }
 
+        private void OnShapeChanged()
+        {
+            UpdateInertiaTensor();
+            UpdateBoundingBox();
+        }
+
         private void UpdateInertiaTensor()
         {
+            // An explicitly assigned tensor is kept until the caller replaces it.
+            if (_hasCustomInertia)
+                return;
+
             switch (ShapeType)
             {
                 case CollisionShapeType.Sphere:
@@ -437,7 +587,7 @@ namespace Artemis.Bodies
 
         private void UpdateWorldInertiaTensor()
         {
-            if (BodyType == BodyType.Static)
+            if (_bodyType != BodyType.Dynamic)
             {
                 _worldInverseInertiaTensor = Matrix3x3.Zero;
                 return;
