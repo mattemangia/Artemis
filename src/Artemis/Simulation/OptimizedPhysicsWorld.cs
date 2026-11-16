@@ -519,8 +519,13 @@ namespace Artemis.Simulation
                     continue;
 
                 double stepTime = dt;
-                if (useCcd && rb.BodyType == BodyType.Dynamic)
-                    stepTime = ContinuousCollision.TimeOfImpact(rb, _bodies, dt);
+                if (useCcd && rb.BodyType == BodyType.Dynamic && ContinuousCollision.NeedsSweep(rb, dt, out var swept))
+                {
+                    // Candidates come from the spatial hash built for this step; the
+                    // margin covers bodies that have already been moved.
+                    var candidates = _spatialHash.Query(swept.Expanded(0.5 * _spatialHash.CellSize));
+                    stepTime = ContinuousCollision.TimeOfImpact(rb, candidates, dt, swept);
+                }
 
                 rb.IntegratePosition(stepTime);
             }

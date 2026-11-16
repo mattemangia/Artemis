@@ -29,6 +29,7 @@ namespace Artemis.Simulation
         private readonly Dictionary<long, List<int>> _spatialGrid;
         private readonly Stack<List<int>> _cellListPool = new();
         private readonly List<int> _largeBodies = new();
+        private readonly List<IPhysicsBody> _sweepCandidates = new();
         private readonly List<(int A, int B)> _pairs = new();
         private (int, int, int)[] _cellMin = new (int, int, int)[64];
         private (int, int, int)[] _cellMax = new (int, int, int)[64];
@@ -472,8 +473,8 @@ namespace Artemis.Simulation
                     continue;
 
                 double stepTime = dt;
-                if (useCcd && rb.BodyType == BodyType.Dynamic)
-                    stepTime = ContinuousCollision.TimeOfImpact(rb, bodies, dt);
+                if (useCcd && rb.BodyType == BodyType.Dynamic && ContinuousCollision.NeedsSweep(rb, dt, out var swept))
+                    stepTime = ContinuousCollision.TimeOfImpact(rb, CollectSweepCandidates(bodies, swept), dt, swept);
 
                 rb.IntegratePosition(stepTime);
             }
@@ -482,6 +483,49 @@ namespace Artemis.Simulation
         #endregion
 
         #region Broad Phase
+
+        /// <summary>
+        /// Bodies near a swept volume, taken from the broad-phase grid of this step.
+        /// The result may contain duplicates.
+        /// </summary>
+        private IReadOnlyList<IPhysicsBody> CollectSweepCandidates(IPhysicsBody[] bodies, AABB swept)
+        {
+            // Bodies integrated earlier in this step have already moved a little.
+            swept = swept.Expanded(0.5 * BroadPhaseCellSize);
+
+            double inv = 1.0 / BroadPhaseCellSize;
+            double minX = Math.Floor(swept.Min.X * inv), maxX = Math.Floor(swept.Max.X * inv);
+            double minY = Math.Floor(swept.Min.Y * inv), maxY = Math.Floor(swept.Max.Y * inv);
+            double minZ = Math.Floor(swept.Min.Z * inv), maxZ = Math.Floor(swept.Max.Z * inv);
+            double cells = (maxX - minX + 1) * (maxY - minY + 1) * (maxZ - minZ + 1);
+
+            // A sweep across a huge volume is cheaper to test against everything.
+            if (!(cells <= 4096) || Math.Abs(minX) > CellCoordLimit || Math.Abs(maxX) > CellCoordLimit ||
+                Math.Abs(minY) > CellCoordLimit || Math.Abs(maxY) > CellCoordLimit ||
+                Math.Abs(minZ) > CellCoordLimit || Math.Abs(maxZ) > CellCoordLimit)
+                return bodies;
+
+            _sweepCandidates.Clear();
+            foreach (int large in _largeBodies)
+                _sweepCandidates.Add(bodies[large]);
+
+            for (int cx = (int)minX; cx <= (int)maxX; cx++)
+            {
+                for (int cy = (int)minY; cy <= (int)maxY; cy++)
+                {
+                    for (int cz = (int)minZ; cz <= (int)maxZ; cz++)
+                    {
+                        if (!_spatialGrid.TryGetValue(GetCellKeyFromCoords(cx, cy, cz), out var list))
+                            continue;
+
+                        foreach (int index in list)
+                            _sweepCandidates.Add(bodies[index]);
+                    }
+                }
+            }
+
+            return _sweepCandidates;
+        }
 
         private void BroadPhase(IPhysicsBody[] bodies)
         {

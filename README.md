@@ -47,6 +47,7 @@ A high-performance, multi-threaded physics engine for C# with GPU acceleration, 
 - [Advanced Topics](#advanced-topics)
 - [Slope Stability](#slope-stability)
 - [API Reference](#api-reference)
+- [Testing](#testing)
 - [Citation](#citation)
 - [Author](#author)
 
@@ -1227,6 +1228,39 @@ world.OnCollision += (info) => {
 };
 ```
 
+### Contact Manifolds and the Contact Solver
+
+Shapes that touch over an area report several contact points. A box lying on a
+face produces up to four points in 3D and two in 2D; this is what lets boxes rest
+flat and stack instead of balancing on a single point.
+
+```csharp
+world.OnCollision += (info) => {
+    for (int i = 0; i < info.ContactCount; i++)
+    {
+        ManifoldPoint point = info.GetContact(i);
+        Vector3D position = point.Position;
+        double depth = point.Penetration;
+    }
+};
+```
+
+Both worlds resolve all contacts of a step together with a sequential-impulse
+solver (`ContactSolver` in 3D, `ContactSolver2D` in 2D): impulses are accumulated
+and clamped per contact, friction follows Coulomb's law, the previous step's
+impulses are reused as a starting point (warm starting), and leftover overlap is
+removed positionally so it does not add energy.
+
+```csharp
+world.SolverIterations = 12;      // velocity iterations: higher = stiffer stacks
+world.PositionIterations = 4;     // penetration recovery iterations
+world.RestitutionThreshold = 1.0; // approach speed (m/s) below which nothing bounces
+world.UseCCD = true;              // stop fast spheres/boxes at their time of impact
+```
+
+Collision results are processed in a fixed order, so a simulation gives the same
+result on every run regardless of thread scheduling.
+
 ### Raycasting
 
 ```csharp
@@ -1588,21 +1622,29 @@ Parallel.ForEach(islandSolver.GetIslandsForParallel(), island => {
 
 ### Sleeping Bodies
 
-```csharp
-// Configure sleeping
-body.CanSleep = true;
-world.AllowSleep = true;
+Bodies that touch each other (or are connected by joints, in 2D) form an *island*.
+An island is put to sleep once every body in it has been at rest for a while, and
+is woken as a whole when something moving touches it or a body is removed from the
+world. Sleeping bodies cost nothing to simulate.
 
-// Manual wake
+```csharp
+// Per body
+body.CanSleep = true;
 if (body.IsSleeping)
 {
     body.WakeUp();
 }
 
-// Sleep thresholds are defined in PhysicsConstants
-PhysicsConstants.DefaultSleepVelocityThreshold;        // 0.05
-PhysicsConstants.DefaultSleepAngularVelocityThreshold; // 0.05
-PhysicsConstants.DefaultSleepTimeThreshold;            // 0.5 seconds
+// 3D worlds (PhysicsWorld)
+world.AllowSleeping = true;
+world.SleepVelocityThreshold = 0.1;          // m/s
+world.SleepAngularVelocityThreshold = 0.25;  // rad/s
+world.SleepTimeThreshold = 0.5;              // seconds
+
+// 2D worlds (PhysicsWorld2D)
+world2D.AllowSleep = true;
+world2D.SleepVelocityThreshold = 0.05;
+world2D.SleepAngularVelocityThreshold = 0.1;
 ```
 
 ### Parallel Physics
@@ -2108,6 +2150,18 @@ if (SimdHelpers.HasNeon && SimdHelpers.HasArm64AdvSimd)
 var particles = new MassiveParticleSystem();
 Console.WriteLine(particles.GpuBackendInfo);
 // Output: "ARM64 NEON (128-bit, 4 floats) - Apple Silicon"
+```
+
+---
+
+## Testing
+
+The `tests/Artemis.Tests` project checks the engine against known physics: free
+fall, Coulomb friction distances, inclines, restitution, momentum and energy
+conservation, stacking, sleeping, tunnelling, joints and Kepler orbits.
+
+```bash
+dotnet test
 ```
 
 ---

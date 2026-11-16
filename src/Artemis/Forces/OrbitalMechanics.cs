@@ -106,6 +106,7 @@ namespace Artemis.Forces
 
         private readonly List<CelestialBody> _bodies;
         private readonly Dictionary<string, OrbitalElements> _orbits;
+        private readonly Dictionary<string, double> _orbitEpochs = new();
         private readonly Dictionary<string, List<Vector3D>> _trajectoryHistory;
         private double _time;
 
@@ -119,8 +120,14 @@ namespace Artemis.Forces
         /// <summary>Gets or sets whether to use N-body simulation (true) or Kepler (false).</summary>
         public bool UseNBody { get; set; } = true;
 
-        /// <summary>Gets or sets the softening parameter to prevent singularities.</summary>
-        public double Softening { get; set; } = 1e6;
+        /// <summary>
+        /// Gets or sets the gravitational softening length in metres. Softening keeps
+        /// the force finite during very close encounters, at the price of weakening
+        /// gravity at distances comparable to it (a value of 1000 km shortens the
+        /// pull on a low Earth orbit by about 2%). It defaults to 0, which gives exact
+        /// Newtonian gravity; set it only for simulations with near-collisions.
+        /// </summary>
+        public double Softening { get; set; }
 
         /// <summary>Gets or sets whether to record trajectory history.</summary>
         public bool RecordTrajectory { get; set; } = false;
@@ -168,6 +175,7 @@ namespace Artemis.Forces
         {
             _trajectoryHistory.Remove(body.Id);
             _orbits.Remove(body.Id);
+            _orbitEpochs.Remove(body.Id);
             return _bodies.Remove(body);
         }
 
@@ -186,6 +194,7 @@ namespace Artemis.Forces
         {
             _bodies.Clear();
             _orbits.Clear();
+            _orbitEpochs.Clear();
             _trajectoryHistory.Clear();
             _time = 0;
         }
@@ -244,7 +253,7 @@ namespace Artemis.Forces
 
                     var r = _bodies[j].Position - _bodies[i].Position;
                     double distSq = r.MagnitudeSquared + Softening * Softening;
-                    double dist = Math.Sqrt(distSq);
+                    if (distSq <= 0) continue; // coincident bodies exert no defined force
                     double forceMag = PhysicsConstants.GravitationalConstant * _bodies[j].Mass / distSq;
 
                     accelerations[i] += r.Normalized * forceMag;
@@ -275,6 +284,7 @@ namespace Artemis.Forces
 
                     var r = _bodies[j].Position - _bodies[i].Position;
                     double distSq = r.MagnitudeSquared + Softening * Softening;
+                    if (distSq <= 0) continue;
                     double forceMag = PhysicsConstants.GravitationalConstant * _bodies[j].Mass / distSq;
 
                     newAccelerations[i] += r.Normalized * forceMag;
@@ -301,11 +311,14 @@ namespace Artemis.Forces
                     // Calculate orbital elements from current state
                     elements = CalculateOrbitalElements(body, body.Parent);
                     _orbits[body.Id] = elements;
+                    _orbitEpochs[body.Id] = _time;
                 }
 
-                // Propagate mean anomaly
+                // Propagate the mean anomaly to the end of this step, measured from the
+                // moment the elements were taken (not from the start of the simulation).
+                _orbitEpochs.TryGetValue(body.Id, out double epoch);
                 double meanMotion = 2 * Math.PI / elements.Period;
-                double meanAnomaly = elements.MeanAnomalyAtEpoch + meanMotion * _time;
+                double meanAnomaly = elements.MeanAnomalyAtEpoch + meanMotion * (_time + deltaTime - epoch);
 
                 // Solve Kepler's equation for eccentric anomaly
                 double eccentricAnomaly = SolveKeplersEquation(meanAnomaly, elements.Eccentricity);
@@ -479,6 +492,7 @@ namespace Artemis.Forces
 
             // Update orbital elements
             _orbits[body.Id] = CalculateOrbitalElements(body, primary);
+            _orbitEpochs[body.Id] = _time;
         }
 
         /// <summary>
@@ -509,6 +523,7 @@ namespace Artemis.Forces
 
             body.Parent = primary;
             _orbits[body.Id] = CalculateOrbitalElements(body, primary);
+            _orbitEpochs[body.Id] = _time;
         }
 
         /// <summary>

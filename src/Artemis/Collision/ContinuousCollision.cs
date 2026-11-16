@@ -19,33 +19,64 @@ namespace Artemis.Collision
         /// </summary>
         public static double TimeOfImpact(RigidBody body, IReadOnlyList<IPhysicsBody> bodies, double dt)
         {
-            double coreRadius;
-            switch (body.ShapeType)
-            {
-                case CollisionShapeType.Sphere:
-                    coreRadius = body.Radius;
-                    break;
-                case CollisionShapeType.Box:
-                    var h = body.HalfExtents;
-                    coreRadius = Math.Min(h.X, Math.Min(h.Y, h.Z));
-                    break;
-                default:
-                    return dt;
-            }
+            if (!NeedsSweep(body, dt, out var swept))
+                return dt;
 
+            return TimeOfImpact(body, bodies, dt, swept);
+        }
+
+        /// <summary>
+        /// Whether a body moves far enough in one step to skip past an obstacle, and
+        /// if so the bounds of the volume its core sphere sweeps. Use the bounds to
+        /// collect candidate bodies from a spatial structure and pass them to
+        /// <see cref="TimeOfImpact(RigidBody, IReadOnlyList{IPhysicsBody}, double, AABB)"/>.
+        /// </summary>
+        public static bool NeedsSweep(RigidBody body, double dt, out AABB swept)
+        {
+            swept = default;
+
+            double coreRadius = CoreRadius(body);
             var velocity = body.Velocity;
-            double travel = velocity.Magnitude * dt;
 
             // Slow bodies cannot skip past anything: discrete detection is enough.
-            if (coreRadius <= 0 || travel <= coreRadius)
-                return dt;
+            if (coreRadius <= 0 || velocity.MagnitudeSquared * dt * dt <= coreRadius * coreRadius)
+                return false;
 
             var start = body.Position;
             var reach = new Vector3D(coreRadius);
             var end = start + velocity * dt;
-            var swept = new AABB(
+            swept = new AABB(
                 new Vector3D(Math.Min(start.X, end.X), Math.Min(start.Y, end.Y), Math.Min(start.Z, end.Z)) - reach,
                 new Vector3D(Math.Max(start.X, end.X), Math.Max(start.Y, end.Y), Math.Max(start.Z, end.Z)) + reach);
+            return true;
+        }
+
+        private static double CoreRadius(RigidBody body)
+        {
+            switch (body.ShapeType)
+            {
+                case CollisionShapeType.Sphere:
+                    return body.Radius;
+                case CollisionShapeType.Box:
+                    var h = body.HalfExtents;
+                    return Math.Min(h.X, Math.Min(h.Y, h.Z));
+                default:
+                    return 0;
+            }
+        }
+
+        /// <summary>
+        /// Time of impact of a fast body against a set of candidate bodies.
+        /// </summary>
+        /// <param name="body">The moving body.</param>
+        /// <param name="bodies">Candidates; may contain duplicates and the body itself.</param>
+        /// <param name="dt">Step duration.</param>
+        /// <param name="swept">Swept bounds from <see cref="NeedsSweep"/>.</param>
+        public static double TimeOfImpact(RigidBody body, IReadOnlyList<IPhysicsBody> bodies, double dt, AABB swept)
+        {
+            double coreRadius = CoreRadius(body);
+            var velocity = body.Velocity;
+            var start = body.Position;
 
             const double tolerance = 1e-4;
             double earliest = dt;
