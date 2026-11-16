@@ -68,7 +68,8 @@ namespace Artemis.Physics2D
             {
                 _position = value;
                 UpdateAABB();
-                WakeUp();
+                if (IsSleeping)
+                    WakeUp();
             }
         }
 
@@ -79,7 +80,7 @@ namespace Artemis.Physics2D
             set
             {
                 _velocity = value;
-                if (_velocity.MagnitudeSquared > PhysicsConstants.Epsilon)
+                if (IsSleeping && _velocity.MagnitudeSquared > PhysicsConstants.Epsilon)
                     WakeUp();
             }
         }
@@ -92,7 +93,8 @@ namespace Artemis.Physics2D
             {
                 _rotation = NormalizeAngle(value);
                 UpdateAABB();
-                WakeUp();
+                if (IsSleeping)
+                    WakeUp();
             }
         }
 
@@ -103,7 +105,7 @@ namespace Artemis.Physics2D
             set
             {
                 _angularVelocity = value;
-                if (Math.Abs(_angularVelocity) > PhysicsConstants.Epsilon)
+                if (IsSleeping && Math.Abs(_angularVelocity) > PhysicsConstants.Epsilon)
                     WakeUp();
             }
         }
@@ -115,7 +117,7 @@ namespace Artemis.Physics2D
             set
             {
                 _mass = Math.Max(value, PhysicsConstants.Epsilon);
-                _inverseMass = BodyType == BodyType2D.Dynamic ? 1.0 / _mass : 0;
+                _inverseMass = 1.0 / _mass;
             }
         }
 
@@ -129,12 +131,12 @@ namespace Artemis.Physics2D
             set
             {
                 _inertia = Math.Max(value, PhysicsConstants.Epsilon);
-                _inverseInertia = BodyType == BodyType2D.Dynamic ? 1.0 / _inertia : 0;
+                _inverseInertia = 1.0 / _inertia;
             }
         }
 
         /// <summary>Inverse inertia (0 for static/kinematic bodies).</summary>
-        public double InverseInertia => BodyType == BodyType2D.Dynamic ? _inverseInertia : 0;
+        public double InverseInertia => BodyType == BodyType2D.Dynamic && !FixedRotation ? _inverseInertia : 0;
 
         /// <summary>The collision shape attached to this body.</summary>
         public Shape2D? Shape { get; set; }
@@ -303,7 +305,8 @@ namespace Artemis.Physics2D
                 return;
 
             _force += force;
-            WakeUp();
+            if (IsSleeping)
+                WakeUp();
         }
 
         /// <summary>
@@ -317,7 +320,8 @@ namespace Artemis.Physics2D
 
             _force += force;
             _torque += Vector2D.Cross(point - _position, force);
-            WakeUp();
+            if (IsSleeping)
+                WakeUp();
         }
 
         /// <summary>
@@ -360,7 +364,8 @@ namespace Artemis.Physics2D
                 return;
 
             _torque += torque;
-            WakeUp();
+            if (IsSleeping)
+                WakeUp();
         }
 
         /// <summary>
@@ -470,11 +475,55 @@ namespace Artemis.Physics2D
             _position += _velocity * dt;
             _rotation = NormalizeAngle(_rotation + _angularVelocity * dt);
             UpdateAABB();
+        }
 
-            if (CanSleep && BodyType == BodyType2D.Dynamic)
-            {
-                CheckSleep(dt);
-            }
+        #endregion
+
+        #region Solver Support
+
+        // Index of the body in the world's body list during a step.
+        internal int WorldIndex;
+
+        // Scratch state of the positional contact correction.
+        internal Vector2D CorrectionLinear;
+        internal double CorrectionAngular;
+
+        internal double SleepTimer
+        {
+            get => _sleepTimer;
+            set => _sleepTimer = value;
+        }
+
+        /// <summary>
+        /// Inverse mass as seen by the contact solver: sleeping bodies do not move.
+        /// </summary>
+        internal double SolverInverseMass
+            => BodyType == BodyType2D.Dynamic && IsActive && !IsSleeping ? _inverseMass : 0;
+
+        /// <summary>
+        /// Inverse inertia as seen by the contact solver.
+        /// </summary>
+        internal double SolverInverseInertia
+            => BodyType == BodyType2D.Dynamic && IsActive && !IsSleeping && !FixedRotation ? _inverseInertia : 0;
+
+        /// <summary>
+        /// Applies a solver impulse without waking the body or touching its sleep timer.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void ApplySolverImpulse(Vector2D impulse, Vector2D r, double inverseMass, double inverseInertia)
+        {
+            _velocity += impulse * inverseMass;
+            _angularVelocity += Vector2D.Cross(r, impulse) * inverseInertia;
+        }
+
+        /// <summary>
+        /// Moves and turns the body without waking it or touching its sleep timer.
+        /// </summary>
+        internal void ApplyPositionCorrection(Vector2D translation, double rotation)
+        {
+            _position += translation;
+            _rotation = NormalizeAngle(_rotation + rotation);
+            UpdateAABB();
         }
 
         #endregion
