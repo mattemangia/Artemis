@@ -93,6 +93,14 @@ namespace Artemis.Collision
                     ? Vector3D.Zero
                     : other.Velocity;
 
+                // Tunnelling needs a large *relative* motion. Bodies travelling together
+                // (debris, a falling pile) are left to the discrete solver, which also
+                // makes this the cheapest possible reject for the common case.
+                var relativeVelocity = velocity - otherVelocity;
+                double relativeSpeedSq = relativeVelocity.MagnitudeSquared;
+                if (relativeSpeedSq * dt * dt <= coreRadius * coreRadius)
+                    continue;
+
                 var otherBounds = other.BoundingBox;
                 if (otherVelocity.MagnitudeSquared > 0)
                 {
@@ -104,10 +112,7 @@ namespace Artemis.Collision
                 if (!swept.Intersects(otherBounds))
                     continue;
 
-                var relativeVelocity = velocity - otherVelocity;
-                double relativeSpeed = relativeVelocity.Magnitude;
-                if (relativeSpeed < PhysicsConstants.Epsilon)
-                    continue;
+                double relativeSpeed = Math.Sqrt(relativeSpeedSq);
 
                 double t = 0;
                 for (int iteration = 0; iteration < 32 && t < earliest; iteration++)

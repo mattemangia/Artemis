@@ -42,7 +42,10 @@ namespace Artemis.Simulation
         private readonly List<IForce> _globalForces;
         private readonly List<ParticleSystem> _particleSystems;
         private readonly List<CollisionInfo> _collisions;
-        private readonly List<(IPhysicsBody A, IPhysicsBody B)> _broadPhasePairs;
+        private readonly BroadPhaseGrid _grid = new();
+        private CollisionInfo[] _narrowPhaseResults = new CollisionInfo[64];
+        private bool _spatialHashDirty = true;
+        private bool _islandsDirty = true;
 
         // Optimizations
         private readonly SpatialHash _spatialHash;
@@ -125,10 +128,10 @@ namespace Artemis.Simulation
         public long StepCount { get; private set; }
 
         /// <summary>Gets the island solver for diagnostics.</summary>
-        public IslandSolver IslandSolver => _islandSolver;
+        public IslandSolver IslandSolver => EnsureIslands();
 
         /// <summary>Gets the spatial hash for diagnostics.</summary>
-        public SpatialHash SpatialHash => _spatialHash;
+        public SpatialHash SpatialHash => EnsureSpatialHash();
 
         // Performance metrics
         /// <summary>Broad phase time in milliseconds.</summary>
@@ -142,6 +145,17 @@ namespace Artemis.Simulation
 
         /// <summary>Integration time in milliseconds.</summary>
         public double IntegrationTimeMs { get; private set; }
+
+        /// <summary>
+        /// Gets the time spent integrating positions, including continuous collision
+        /// detection and penetration recovery (ms).
+        /// </summary>
+        public double PositionTimeMs { get; private set; }
+
+        /// <summary>
+        /// Gets the time spent updating sleep states (ms).
+        /// </summary>
+        public double SleepTimeMs { get; private set; }
 
         /// <summary>Event raised when a collision occurs.</summary>
         public event Action<CollisionInfo>? OnCollision;
@@ -168,7 +182,6 @@ namespace Artemis.Simulation
             _globalForces = new List<IForce>(8);
             _particleSystems = new List<ParticleSystem>(16);
             _collisions = new List<CollisionInfo>(256);
-            _broadPhasePairs = new List<(IPhysicsBody, IPhysicsBody)>(512);
 
             _spatialHash = new SpatialHash(spatialCellSize);
             _islandSolver = new IslandSolver(10000);
@@ -204,6 +217,7 @@ namespace Artemis.Simulation
             if (!_bodies.Contains(body))
             {
                 _bodies.Add(body);
+                _spatialHashDirty = true;
                 if (body.BodyType == BodyType.Dynamic)
                 {
                     _dynamicBodies.Add(body);
@@ -218,6 +232,8 @@ namespace Artemis.Simulation
         {
             _dynamicBodies.Remove(body);
             bool removed = _bodies.Remove(body);
+            _spatialHashDirty = true;
+            _islandsDirty = true;
 
             // Whatever was resting on the removed body has lost its support.
             if (removed)
@@ -248,6 +264,8 @@ namespace Artemis.Simulation
             _bodies.Clear();
             _dynamicBodies.Clear();
             _spatialHash.Clear();
+            _spatialHashDirty = true;
+            _islandsDirty = true;
             _solver.ClearCache();
         }
 
@@ -350,7 +368,6 @@ namespace Artemis.Simulation
             NarrowPhaseTimeMs = _profileTimer.Elapsed.TotalMilliseconds;
 
             // 5. Build islands and wake the ones that are being disturbed
-            _islandSolver.BuildIslands(_bodies, _collisions);
             _sleep.BuildIslands(_bodies, _collisions);
             _sleep.WakeDisturbedIslands(_bodies, _collisions);
 
@@ -359,11 +376,16 @@ namespace Artemis.Simulation
             SolveConstraints(dt);
             SolverTimeMs = _profileTimer.Elapsed.TotalMilliseconds;
 
-            // 7. Integrate positions
+            // 7. Integrate positions (includes continuous collision detection)
+            _profileTimer.Restart();
             IntegratePositions(dt);
+            PositionTimeMs = _profileTimer.Elapsed.TotalMilliseconds;
+
+            _profileTimer.Restart();
 
             // 8. Update sleeping
             _sleep.UpdateSleeping(_bodies, dt);
+            SleepTimeMs = _profileTimer.Elapsed.TotalMilliseconds;
 
             // 9. Fire collision events
             foreach (var collision in _collisions)
@@ -459,43 +481,72 @@ namespace Artemis.Simulation
 
         private void BroadPhase()
         {
-            // Rebuild spatial hash
-            _spatialHash.Rebuild(_bodies);
+            _grid.CellSize = _spatialHash.CellSize;
+            _grid.Build(_bodies);
 
-            // Get potential collision pairs
-            _spatialHash.GetPotentialPairs(_broadPhasePairs);
+            // The spatial hash and the island list only serve queries and statistics:
+            // they are brought up to date when someone asks for them.
+            _spatialHashDirty = true;
+            _islandsDirty = true;
+        }
+
+        private SpatialHash EnsureSpatialHash()
+        {
+            if (_spatialHashDirty)
+            {
+                _spatialHash.Rebuild(_bodies);
+                _spatialHashDirty = false;
+            }
+            return _spatialHash;
+        }
+
+        private IslandSolver EnsureIslands()
+        {
+            if (_islandsDirty)
+            {
+                _islandSolver.BuildIslands(_bodies, _collisions);
+                _islandsDirty = false;
+            }
+            return _islandSolver;
         }
 
         private void NarrowPhase()
         {
-            if (UseMultiThreading && _broadPhasePairs.Count > 50)
-            {
-                var localCollisions = new ConcurrentBag<CollisionInfo>();
+            var pairs = _grid.Pairs;
+            int pairCount = pairs.Count;
+            if (pairCount == 0)
+                return;
 
-                Parallel.ForEach(_broadPhasePairs, _parallelOptions, pair =>
+            if (UseMultiThreading && pairCount > 256)
+            {
+                // Results are stored by pair index, so the collision order (and with it
+                // the simulation) does not depend on thread scheduling.
+                if (_narrowPhaseResults.Length < pairCount)
+                    _narrowPhaseResults = new CollisionInfo[Math.Max(pairCount, _narrowPhaseResults.Length * 2)];
+
+                var results = _narrowPhaseResults;
+                var bodies = _bodies;
+                Parallel.For(0, pairCount, _parallelOptions, p =>
                 {
-                    var collision = CollisionDetector.Detect(pair.A, pair.B);
-                    if (collision.HasCollision)
-                    {
-                        localCollisions.Add(collision);
-                    }
+                    var (i, j) = pairs[p];
+                    results[p] = CollisionDetector.Detect(bodies[i], bodies[j]);
                 });
 
-                // Collect results
-                foreach (var collision in localCollisions)
+                for (int p = 0; p < pairCount; p++)
                 {
-                    _collisions.Add(collision);
+                    if (results[p].HasCollision)
+                        _collisions.Add(results[p]);
+                    results[p] = default;
                 }
             }
             else
             {
-                foreach (var pair in _broadPhasePairs)
+                for (int p = 0; p < pairCount; p++)
                 {
-                    var collision = CollisionDetector.Detect(pair.A, pair.B);
+                    var (i, j) = pairs[p];
+                    var collision = CollisionDetector.Detect(_bodies[i], _bodies[j]);
                     if (collision.HasCollision)
-                    {
                         _collisions.Add(collision);
-                    }
                 }
             }
         }
@@ -521,9 +572,8 @@ namespace Artemis.Simulation
                 double stepTime = dt;
                 if (useCcd && rb.BodyType == BodyType.Dynamic && ContinuousCollision.NeedsSweep(rb, dt, out var swept))
                 {
-                    // Candidates come from the spatial hash built for this step; the
-                    // margin covers bodies that have already been moved.
-                    var candidates = _spatialHash.Query(swept.Expanded(0.5 * _spatialHash.CellSize));
+                    // Candidates come from the broad-phase grid built for this step.
+                    var candidates = _grid.CollectSweepCandidates(_bodies, swept);
                     stepTime = ContinuousCollision.TimeOfImpact(rb, candidates, dt, swept);
                 }
 
@@ -610,7 +660,7 @@ namespace Artemis.Simulation
             double closestDist = maxDistance;
 
             // Use spatial hash for faster raycast
-            foreach (var body in _spatialHash.RaycastAll(origin, direction, maxDistance))
+            foreach (var body in EnsureSpatialHash().RaycastAll(origin, direction, maxDistance))
             {
                 if (body is RigidBody rb)
                 {
@@ -648,7 +698,7 @@ namespace Artemis.Simulation
                 center + new Vector3D(radius, radius, radius)
             );
 
-            foreach (var body in _spatialHash.Query(queryAABB))
+            foreach (var body in EnsureSpatialHash().Query(queryAABB))
             {
                 if (Vector3D.DistanceSquared(center, body.Position) <= radiusSq)
                 {
@@ -666,7 +716,7 @@ namespace Artemis.Simulation
         {
             var results = new List<IPhysicsBody>();
 
-            foreach (var body in _spatialHash.Query(bounds))
+            foreach (var body in EnsureSpatialHash().Query(bounds))
             {
                 if (bounds.Intersects(body.BoundingBox))
                 {
@@ -704,12 +754,12 @@ namespace Artemis.Simulation
         public string GetPerformanceStats()
         {
             return $"Bodies: {_bodies.Count} (Dynamic: {_dynamicBodies.Count})\n" +
-                   $"Islands: {_islandSolver.IslandCount} (Sleeping: {_islandSolver.SleepingIslandCount})\n" +
-                   $"Broad Phase: {BroadPhaseTimeMs:F2}ms ({_broadPhasePairs.Count} pairs)\n" +
+                   $"Islands: {EnsureIslands().IslandCount} (Sleeping: {EnsureIslands().SleepingIslandCount})\n" +
+                   $"Broad Phase: {BroadPhaseTimeMs:F2}ms ({_grid.Pairs.Count} pairs)\n" +
                    $"Narrow Phase: {NarrowPhaseTimeMs:F2}ms ({_collisions.Count} contacts)\n" +
                    $"Solver: {SolverTimeMs:F2}ms\n" +
                    $"Integration: {IntegrationTimeMs:F2}ms\n" +
-                   $"Spatial Hash Cells: {_spatialHash.OccupiedCellCount}";
+                   $"Spatial Hash Cells: {EnsureSpatialHash().OccupiedCellCount}";
         }
 
         /// <summary>

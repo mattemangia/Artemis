@@ -25,17 +25,9 @@ namespace Artemis.Simulation
         private readonly List<CollisionInfo> _collisions;
         private double _accumulator;
 
-        // Spatial hashing for broad phase
-        private readonly Dictionary<long, List<int>> _spatialGrid;
-        private readonly Stack<List<int>> _cellListPool = new();
-        private readonly List<int> _largeBodies = new();
-        private readonly List<IPhysicsBody> _sweepCandidates = new();
-        private readonly List<(int A, int B)> _pairs = new();
-        private (int, int, int)[] _cellMin = new (int, int, int)[64];
-        private (int, int, int)[] _cellMax = new (int, int, int)[64];
+        // Broad phase
+        private readonly BroadPhaseGrid _grid = new();
         private CollisionInfo[] _narrowPhaseResults = new CollisionInfo[64];
-        private const double MaxCellsPerBody = 64;
-        private const double CellCoordLimit = 1 << 20;
         private const int ParallelThreshold = 256;
 
         // Contact solving and sleeping
@@ -43,7 +35,6 @@ namespace Artemis.Simulation
         private readonly SleepManager _sleep = new();
         private volatile IPhysicsBody[]? _bodySnapshot;
         private Vector3D _gravity = new(0, -PhysicsConstants.EarthGravity, 0);
-        private double _broadPhaseCellSize = 2.0;
 
         // Thread synchronization
         private readonly ReaderWriterLockSlim _bodiesLock = new();
@@ -151,13 +142,8 @@ namespace Artemis.Simulation
         /// </summary>
         public double BroadPhaseCellSize
         {
-            get => _broadPhaseCellSize;
-            set
-            {
-                if (!(value > 0) || double.IsInfinity(value))
-                    throw new ArgumentOutOfRangeException(nameof(value), "Cell size must be positive and finite.");
-                _broadPhaseCellSize = value;
-            }
+            get => _grid.CellSize;
+            set => _grid.CellSize = value;
         }
 
         /// <summary>
@@ -220,8 +206,7 @@ namespace Artemis.Simulation
             _globalForces = new List<IForce>();
             _particleSystems = new List<ParticleSystem>();
             _collisions = new List<CollisionInfo>();
-            _spatialGrid = new Dictionary<long, List<int>>();
-        }
+                    }
 
         /// <summary>
         /// Creates a new physics world with custom gravity.
@@ -372,7 +357,7 @@ namespace Artemis.Simulation
             IntegrateVelocities(bodies, dt);
 
             // 2. Collision detection at the current positions.
-            BroadPhase(bodies);
+            _grid.Build(bodies);
             NarrowPhase(bodies);
 
             // 3. Wake sleeping bodies that are being disturbed, then solve contacts.
@@ -474,7 +459,7 @@ namespace Artemis.Simulation
 
                 double stepTime = dt;
                 if (useCcd && rb.BodyType == BodyType.Dynamic && ContinuousCollision.NeedsSweep(rb, dt, out var swept))
-                    stepTime = ContinuousCollision.TimeOfImpact(rb, CollectSweepCandidates(bodies, swept), dt, swept);
+                    stepTime = ContinuousCollision.TimeOfImpact(rb, _grid.CollectSweepCandidates(bodies, swept), dt, swept);
 
                 rb.IntegratePosition(stepTime);
             }
@@ -482,203 +467,12 @@ namespace Artemis.Simulation
 
         #endregion
 
-        #region Broad Phase
-
-        /// <summary>
-        /// Bodies near a swept volume, taken from the broad-phase grid of this step.
-        /// The result may contain duplicates.
-        /// </summary>
-        private IReadOnlyList<IPhysicsBody> CollectSweepCandidates(IPhysicsBody[] bodies, AABB swept)
-        {
-            // Bodies integrated earlier in this step have already moved a little.
-            swept = swept.Expanded(0.5 * BroadPhaseCellSize);
-
-            double inv = 1.0 / BroadPhaseCellSize;
-            double minX = Math.Floor(swept.Min.X * inv), maxX = Math.Floor(swept.Max.X * inv);
-            double minY = Math.Floor(swept.Min.Y * inv), maxY = Math.Floor(swept.Max.Y * inv);
-            double minZ = Math.Floor(swept.Min.Z * inv), maxZ = Math.Floor(swept.Max.Z * inv);
-            double cells = (maxX - minX + 1) * (maxY - minY + 1) * (maxZ - minZ + 1);
-
-            // A sweep across a huge volume is cheaper to test against everything.
-            if (!(cells <= 4096) || Math.Abs(minX) > CellCoordLimit || Math.Abs(maxX) > CellCoordLimit ||
-                Math.Abs(minY) > CellCoordLimit || Math.Abs(maxY) > CellCoordLimit ||
-                Math.Abs(minZ) > CellCoordLimit || Math.Abs(maxZ) > CellCoordLimit)
-                return bodies;
-
-            _sweepCandidates.Clear();
-            foreach (int large in _largeBodies)
-                _sweepCandidates.Add(bodies[large]);
-
-            for (int cx = (int)minX; cx <= (int)maxX; cx++)
-            {
-                for (int cy = (int)minY; cy <= (int)maxY; cy++)
-                {
-                    for (int cz = (int)minZ; cz <= (int)maxZ; cz++)
-                    {
-                        if (!_spatialGrid.TryGetValue(GetCellKeyFromCoords(cx, cy, cz), out var list))
-                            continue;
-
-                        foreach (int index in list)
-                            _sweepCandidates.Add(bodies[index]);
-                    }
-                }
-            }
-
-            return _sweepCandidates;
-        }
-
-        private void BroadPhase(IPhysicsBody[] bodies)
-        {
-            foreach (var list in _spatialGrid.Values)
-            {
-                list.Clear();
-                _cellListPool.Push(list);
-            }
-            _spatialGrid.Clear();
-            _largeBodies.Clear();
-            _pairs.Clear();
-
-            int count = bodies.Length;
-            if (_cellMin.Length < count)
-            {
-                _cellMin = new (int, int, int)[Math.Max(count, _cellMin.Length * 2)];
-                _cellMax = new (int, int, int)[_cellMin.Length];
-            }
-
-            double inv = 1.0 / BroadPhaseCellSize;
-
-            for (int i = 0; i < count; i++)
-            {
-                var body = bodies[i];
-                if (!body.IsActive)
-                    continue;
-
-                var box = body.BoundingBox;
-                double minX = Math.Floor(box.Min.X * inv), maxX = Math.Floor(box.Max.X * inv);
-                double minY = Math.Floor(box.Min.Y * inv), maxY = Math.Floor(box.Max.Y * inv);
-                double minZ = Math.Floor(box.Min.Z * inv), maxZ = Math.Floor(box.Max.Z * inv);
-
-                double cells = (maxX - minX + 1) * (maxY - minY + 1) * (maxZ - minZ + 1);
-
-                // Bodies that span many cells (ground planes, walls) or whose bounds are
-                // not finite are tested against everything instead of flooding the grid.
-                if (!(cells <= MaxCellsPerBody) || Math.Abs(minX) > CellCoordLimit || Math.Abs(maxX) > CellCoordLimit ||
-                    Math.Abs(minY) > CellCoordLimit || Math.Abs(maxY) > CellCoordLimit ||
-                    Math.Abs(minZ) > CellCoordLimit || Math.Abs(maxZ) > CellCoordLimit)
-                {
-                    if (double.IsNaN(cells))
-                        continue;
-                    _largeBodies.Add(i);
-                    continue;
-                }
-
-                var min = ((int)minX, (int)minY, (int)minZ);
-                var max = ((int)maxX, (int)maxY, (int)maxZ);
-                _cellMin[i] = min;
-                _cellMax[i] = max;
-
-                for (int cx = min.Item1; cx <= max.Item1; cx++)
-                {
-                    for (int cy = min.Item2; cy <= max.Item2; cy++)
-                    {
-                        for (int cz = min.Item3; cz <= max.Item3; cz++)
-                        {
-                            long key = GetCellKeyFromCoords(cx, cy, cz);
-                            if (!_spatialGrid.TryGetValue(key, out var list))
-                            {
-                                list = _cellListPool.Count > 0 ? _cellListPool.Pop() : new List<int>(8);
-                                _spatialGrid[key] = list;
-                            }
-                            list.Add(i);
-                        }
-                    }
-                }
-            }
-
-            // Pairs sharing a cell. Two bodies can share several cells, so a pair is
-            // reported only from the first cell their cell ranges have in common.
-            foreach (var cell in _spatialGrid)
-            {
-                var indices = cell.Value;
-                if (indices.Count < 2)
-                    continue;
-
-                long cellKey = cell.Key;
-
-                for (int a = 0; a < indices.Count; a++)
-                {
-                    int i = indices[a];
-                    for (int b = a + 1; b < indices.Count; b++)
-                    {
-                        int j = indices[b];
-
-                        var minI = _cellMin[i];
-                        var minJ = _cellMin[j];
-                        long firstShared = GetCellKeyFromCoords(
-                            Math.Max(minI.Item1, minJ.Item1),
-                            Math.Max(minI.Item2, minJ.Item2),
-                            Math.Max(minI.Item3, minJ.Item3));
-                        if (firstShared != cellKey)
-                            continue;
-
-                        AddPairIfOverlapping(bodies, i, j);
-                    }
-                }
-            }
-
-            // Large bodies against everything else.
-            for (int a = 0; a < _largeBodies.Count; a++)
-            {
-                int large = _largeBodies[a];
-                for (int k = 0; k < count; k++)
-                {
-                    if (k == large)
-                        continue;
-
-                    // Large-large pairs are visited from both sides: keep one.
-                    if (k < large && _largeBodies.Contains(k))
-                        continue;
-
-                    AddPairIfOverlapping(bodies, large, k);
-                }
-            }
-        }
-
-        private void AddPairIfOverlapping(IPhysicsBody[] bodies, int i, int j)
-        {
-            var bodyA = bodies[i];
-            var bodyB = bodies[j];
-
-            if (!bodyA.IsActive || !bodyB.IsActive)
-                return;
-
-            // At least one side must be able to react.
-            bool movingA = bodyA.BodyType == BodyType.Dynamic && !bodyA.IsSleeping;
-            bool movingB = bodyB.BodyType == BodyType.Dynamic && !bodyB.IsSleeping;
-            if (!movingA && !movingB)
-            {
-                // A moving kinematic body must still be able to wake a sleeper.
-                bool sleeperAndMover =
-                    (bodyA.BodyType == BodyType.Dynamic && SleepManager.IsMovingKinematic(bodyB)) ||
-                    (bodyB.BodyType == BodyType.Dynamic && SleepManager.IsMovingKinematic(bodyA));
-                if (!sleeperAndMover)
-                    return;
-            }
-
-            if (!bodyA.BoundingBox.Intersects(bodyB.BoundingBox))
-                return;
-
-            _pairs.Add(i < j ? (i, j) : (j, i));
-        }
-
-        private static long GetCellKeyFromCoords(int cx, int cy, int cz)
-        {
-            return ((long)(cx & 0x1FFFFF) << 42) | ((long)(cy & 0x1FFFFF) << 21) | (long)(cz & 0x1FFFFF);
-        }
+        #region Narrow Phase
 
         private void NarrowPhase(IPhysicsBody[] bodies)
         {
-            int pairCount = _pairs.Count;
+            var pairList = _grid.Pairs;
+            int pairCount = pairList.Count;
             if (pairCount == 0)
                 return;
 
@@ -690,7 +484,7 @@ namespace Artemis.Simulation
                     _narrowPhaseResults = new CollisionInfo[Math.Max(pairCount, _narrowPhaseResults.Length * 2)];
 
                 var results = _narrowPhaseResults;
-                var pairs = _pairs;
+                var pairs = pairList;
                 Parallel.For(0, pairCount, p =>
                 {
                     var (i, j) = pairs[p];
@@ -708,7 +502,7 @@ namespace Artemis.Simulation
             {
                 for (int p = 0; p < pairCount; p++)
                 {
-                    var (i, j) = _pairs[p];
+                    var (i, j) = pairList[p];
                     var collision = CollisionDetector.Detect(bodies[i], bodies[j]);
                     if (collision.HasCollision)
                         _collisions.Add(collision);
