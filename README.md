@@ -6,7 +6,7 @@
 
 A high-performance, multi-threaded physics engine for C# with GPU acceleration, SIMD optimization, and comprehensive 2D/3D simulation capabilities.
 
-[![.NET](https://img.shields.io/badge/.NET-6.0%2F7.0%2F8.0-blue)](https://dotnet.microsoft.com)
+[![.NET](https://img.shields.io/badge/.NET-10.0-blue)](https://dotnet.microsoft.com)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 ---
@@ -85,7 +85,7 @@ dotnet add package Artemis.Physics
 ```
 
 ### Requirements
-- .NET 6.0, 7.0, or 8.0
+- .NET 10 SDK (the core library also targets .NET Standard 2.1)
 - Optional: GPU with OpenCL/CUDA support for acceleration
 
 ---
@@ -1965,10 +1965,10 @@ else
 
 | Platform | Minimum | Recommended |
 |----------|---------|-------------|
-| Windows | .NET 6.0, x64 | .NET 8.0, AVX2 CPU |
-| Linux | .NET 6.0, x64 | .NET 8.0, AVX2 CPU |
-| macOS Intel | .NET 6.0, x64 | .NET 8.0, AVX CPU |
-| macOS Apple Silicon | .NET 6.0, ARM64 | .NET 8.0, M1/M2/M3 |
+| Windows | .NET 10.0, x64 | .NET 10.0, AVX2 CPU |
+| Linux | .NET 10.0, x64 | .NET 10.0, AVX2 CPU |
+| macOS Intel | .NET 10.0, x64 | .NET 10.0, AVX CPU |
+| macOS Apple Silicon | .NET 10.0, ARM64 | .NET 10.0, M1/M2/M3 |
 
 ### Dependencies
 
