@@ -17,7 +17,7 @@ namespace Artemis.Particles
     /// Uses SIMD, multi-threading, and GPU acceleration (OpenCL/Metal/CUDA).
     /// Cross-platform: Windows, Linux, macOS (including Apple Silicon M1/M2/M3).
     /// </summary>
-    public class MassiveParticleSystem : IDisposable
+    public partial class MassiveParticleSystem : IDisposable
     {
         #region Constants
 
@@ -55,8 +55,6 @@ namespace Artemis.Particles
         // Spatial hash data
         private int[] _cellIndices;
         private int[] _particleIndices;
-        private int[] _cellStart;
-        private int[] _cellEnd;
 
         private int _capacity;
         private int _count;
@@ -66,7 +64,7 @@ namespace Artemis.Particles
         private float _cellSize;
         private float _invCellSize;
         private int _gridSizeX, _gridSizeY, _gridSizeZ;
-        private int _totalCells;
+        private long _totalCells;
 
         // GPU compute
         private MassiveGpuCompute? _gpuCompute;
@@ -216,7 +214,7 @@ namespace Artemis.Particles
             _gridSizeX = Math.Max(1, (int)Math.Ceiling(boundsSize.X / cellSize));
             _gridSizeY = Math.Max(1, (int)Math.Ceiling(boundsSize.Y / cellSize));
             _gridSizeZ = Math.Max(1, (int)Math.Ceiling(boundsSize.Z / cellSize));
-            _totalCells = _gridSizeX * _gridSizeY * _gridSizeZ;
+            _totalCells = (long)_gridSizeX * _gridSizeY * _gridSizeZ;
 
             // Thread configuration
             _threadCount = Environment.ProcessorCount;
@@ -258,8 +256,7 @@ namespace Artemis.Particles
             // Spatial hash arrays
             _cellIndices = new int[alignedCapacity];
             _particleIndices = new int[alignedCapacity];
-            _cellStart = new int[_totalCells + 1];
-            _cellEnd = new int[_totalCells + 1];
+            AllocateSolverArrays(alignedCapacity);
 
             _capacity = alignedCapacity;
         }
@@ -331,6 +328,9 @@ namespace Artemis.Particles
             if (collides) flags |= 2;
             if (affectedByGravity) flags |= 4;
             _flags[index] = flags;
+            _rest[index] = 0;
+            _wake[index] = 0;
+            if (radius > _maxRadius) _maxRadius = radius;
 
             Interlocked.Increment(ref _aliveCount);
             return index;
@@ -418,6 +418,7 @@ namespace Artemis.Particles
 
             float invMass = mass > 0 ? 1.0f / mass : 0;
             byte flags = (byte)(1 | 2 | 4); // alive, collides, affected by gravity
+            if (radius > _maxRadius) _maxRadius = radius;
 
             // Parallel batch initialization
             Parallel.For(0, count, _parallelOptions, i =>
@@ -440,6 +441,8 @@ namespace Artemis.Particles
                 _lifetime[idx] = lifetime;
                 _color[idx] = color;
                 _flags[idx] = flags;
+                _rest[idx] = 0;
+                _wake[idx] = 0;
             });
 
             Interlocked.Add(ref _aliveCount, count);
@@ -454,6 +457,8 @@ namespace Artemis.Particles
             Array.Clear(_flags, 0, _count);
             _count = 0;
             _aliveCount = 0;
+            _maxRadius = 0;
+            ClearGroups();
         }
 
         #endregion
@@ -521,472 +526,9 @@ namespace Artemis.Particles
             );
         }
 
-        private void UpdateCpu(float dt)
-        {
-            // 1. Integrate velocities and positions (SIMD + parallel)
-            IntegrateSimd(dt);
-
-            // 2. Build spatial hash for collision detection
-            if (EnableCollisions)
-            {
-                BuildSpatialHashParallel();
-
-                // 3. Detect and resolve collisions
-                ResolveCollisionsParallel();
-            }
-
-            // 4. Handle boundary collisions
-            HandleBoundaryCollisionsSimd();
-
-            // 5. Update lifetimes
-            UpdateLifetimesSimd(dt);
-        }
-
-        #endregion
-
-        #region SIMD Integration
-
-        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
-        private void IntegrateSimd(float dt)
-        {
-            int count = _count;
-            int simdWidth = Vector<float>.Count;
-            int simdCount = count / simdWidth;
-            int remainder = count % simdWidth;
-
-            var dtVec = new Vector<float>(dt);
-            var gravXVec = new Vector<float>(Gravity.X * dt);
-            var gravYVec = new Vector<float>(Gravity.Y * dt);
-            var gravZVec = new Vector<float>(Gravity.Z * dt);
-            var dampingVec = new Vector<float>(Damping);
-            var gravityFlag = new Vector<byte>(4);
-
-            // Process in parallel chunks
-            int chunkSize = Math.Max(simdWidth * 64, simdCount / _threadCount * simdWidth);
-
-            Parallel.For(0, (count + chunkSize - 1) / chunkSize, _parallelOptions, chunkIdx =>
-            {
-                int start = chunkIdx * chunkSize;
-                int end = Math.Min(start + chunkSize, count);
-
-                // SIMD path
-                int simdEnd = start + ((end - start) / simdWidth) * simdWidth;
-
-                for (int i = start; i < simdEnd; i += simdWidth)
-                {
-                    // Load velocities
-                    var velX = new Vector<float>(_velX, i);
-                    var velY = new Vector<float>(_velY, i);
-                    var velZ = new Vector<float>(_velZ, i);
-
-                    // Load flags to check gravity
-                    var flags = new Vector<byte>(_flags, i);
-
-                    // Apply gravity (conditional based on flags)
-                    // For simplicity, apply to all - flag check would need scalar fallback
-                    velX += gravXVec;
-                    velY += gravYVec;
-                    velZ += gravZVec;
-
-                    // Apply damping
-                    velX *= dampingVec;
-                    velY *= dampingVec;
-                    velZ *= dampingVec;
-
-                    // Store velocities
-                    velX.CopyTo(_velX, i);
-                    velY.CopyTo(_velY, i);
-                    velZ.CopyTo(_velZ, i);
-
-                    // Load positions
-                    var posX = new Vector<float>(_posX, i);
-                    var posY = new Vector<float>(_posY, i);
-                    var posZ = new Vector<float>(_posZ, i);
-
-                    // Update positions
-                    posX += velX * dtVec;
-                    posY += velY * dtVec;
-                    posZ += velZ * dtVec;
-
-                    // Store positions
-                    posX.CopyTo(_posX, i);
-                    posY.CopyTo(_posY, i);
-                    posZ.CopyTo(_posZ, i);
-                }
-
-                // Scalar remainder
-                for (int i = simdEnd; i < end; i++)
-                {
-                    if ((_flags[i] & 1) == 0) continue;
-
-                    if ((_flags[i] & 4) != 0)
-                    {
-                        _velX[i] += Gravity.X * dt;
-                        _velY[i] += Gravity.Y * dt;
-                        _velZ[i] += Gravity.Z * dt;
-                    }
-
-                    _velX[i] *= Damping;
-                    _velY[i] *= Damping;
-                    _velZ[i] *= Damping;
-
-                    _posX[i] += _velX[i] * dt;
-                    _posY[i] += _velY[i] * dt;
-                    _posZ[i] += _velZ[i] * dt;
-                }
-            });
-        }
-
-        #endregion
-
-        #region Spatial Hash (Counting Sort - GPU-friendly)
-
-        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
-        private void BuildSpatialHashParallel()
-        {
-            int count = _count;
-
-            // Clear cell counts
-            Array.Clear(_cellStart, 0, _totalCells + 1);
-
-            // Phase 1: Compute cell indices for each particle
-            Parallel.For(0, count, _parallelOptions, i =>
-            {
-                if ((_flags[i] & 1) == 0)
-                {
-                    _cellIndices[i] = -1;
-                    return;
-                }
-
-                int cx = (int)((_posX[i] - (float)Bounds.Min.X) * _invCellSize);
-                int cy = (int)((_posY[i] - (float)Bounds.Min.Y) * _invCellSize);
-                int cz = (int)((_posZ[i] - (float)Bounds.Min.Z) * _invCellSize);
-
-                cx = Math.Clamp(cx, 0, _gridSizeX - 1);
-                cy = Math.Clamp(cy, 0, _gridSizeY - 1);
-                cz = Math.Clamp(cz, 0, _gridSizeZ - 1);
-
-                int cellIndex = cx + cy * _gridSizeX + cz * _gridSizeX * _gridSizeY;
-                _cellIndices[i] = cellIndex;
-            });
-
-            // Phase 2: Count particles per cell (using interlocked operations)
-            var cellCounts = new int[_totalCells];
-            Parallel.For(0, count, _parallelOptions, i =>
-            {
-                int cellIdx = _cellIndices[i];
-                if (cellIdx >= 0)
-                {
-                    Interlocked.Increment(ref cellCounts[cellIdx]);
-                }
-            });
-
-            // Phase 3: Prefix sum to get cell start indices
-            _cellStart[0] = 0;
-            for (int i = 0; i < _totalCells; i++)
-            {
-                _cellStart[i + 1] = _cellStart[i] + cellCounts[i];
-                _cellEnd[i] = _cellStart[i]; // Will be incremented during insertion
-            }
-
-            // Phase 4: Insert particles into sorted order
-            var insertIndices = new int[_totalCells];
-            Array.Copy(_cellStart, insertIndices, _totalCells);
-
-            for (int i = 0; i < count; i++)
-            {
-                int cellIdx = _cellIndices[i];
-                if (cellIdx >= 0)
-                {
-                    int insertIdx = Interlocked.Increment(ref insertIndices[cellIdx]) - 1;
-                    _particleIndices[insertIdx] = i;
-                }
-            }
-
-            // Update cell end indices
-            for (int i = 0; i < _totalCells; i++)
-            {
-                _cellEnd[i] = _cellStart[i] + cellCounts[i];
-            }
-        }
-
-        #endregion
-
-        #region Collision Detection & Resolution
-
-        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
-        private void ResolveCollisionsParallel()
-        {
-            int count = _count;
-
-            // Process collisions per-cell in parallel
-            Parallel.For(0, _totalCells, _parallelOptions, cellIdx =>
-            {
-                int start = _cellStart[cellIdx];
-                int end = _cellEnd[cellIdx];
-
-                if (end - start < 2) return;
-
-                // Get neighboring cell indices
-                int cz = cellIdx / (_gridSizeX * _gridSizeY);
-                int remainder = cellIdx % (_gridSizeX * _gridSizeY);
-                int cy = remainder / _gridSizeX;
-                int cx = remainder % _gridSizeX;
-
-                // Check within cell
-                for (int i = start; i < end; i++)
-                {
-                    int pi = _particleIndices[i];
-                    if ((_flags[pi] & 3) != 3) continue; // Not alive or not collidable
-
-                    for (int j = i + 1; j < end; j++)
-                    {
-                        int pj = _particleIndices[j];
-                        if ((_flags[pj] & 3) != 3) continue;
-
-                        ResolveCollision(pi, pj);
-                    }
-                }
-
-                // Check with neighboring cells (only positive direction to avoid duplicates)
-                for (int dz = 0; dz <= 1; dz++)
-                {
-                    for (int dy = 0; dy <= 1; dy++)
-                    {
-                        for (int dx = 0; dx <= 1; dx++)
-                        {
-                            if (dx == 0 && dy == 0 && dz == 0) continue;
-
-                            int ncx = cx + dx;
-                            int ncy = cy + dy;
-                            int ncz = cz + dz;
-
-                            if (ncx >= _gridSizeX || ncy >= _gridSizeY || ncz >= _gridSizeZ) continue;
-
-                            int neighborIdx = ncx + ncy * _gridSizeX + ncz * _gridSizeX * _gridSizeY;
-                            int nstart = _cellStart[neighborIdx];
-                            int nend = _cellEnd[neighborIdx];
-
-                            for (int i = start; i < end; i++)
-                            {
-                                int pi = _particleIndices[i];
-                                if ((_flags[pi] & 3) != 3) continue;
-
-                                for (int j = nstart; j < nend; j++)
-                                {
-                                    int pj = _particleIndices[j];
-                                    if ((_flags[pj] & 3) != 3) continue;
-
-                                    ResolveCollision(pi, pj);
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void ResolveCollision(int i, int j)
-        {
-            float dx = _posX[j] - _posX[i];
-            float dy = _posY[j] - _posY[i];
-            float dz = _posZ[j] - _posZ[i];
-
-            float distSq = dx * dx + dy * dy + dz * dz;
-            float minDist = _radius[i] + _radius[j];
-
-            if (distSq >= minDist * minDist || distSq < EPSILON) return;
-
-            float dist = MathF.Sqrt(distSq);
-            float invDist = 1.0f / dist;
-            float nx = dx * invDist;
-            float ny = dy * invDist;
-            float nz = dz * invDist;
-
-            float penetration = minDist - dist;
-
-            // Position correction (push apart)
-            float totalInvMass = _invMass[i] + _invMass[j];
-            if (totalInvMass < EPSILON) return;
-
-            float correctionMag = penetration / totalInvMass * 0.8f; // 80% correction
-
-            float corrI = correctionMag * _invMass[i];
-            float corrJ = correctionMag * _invMass[j];
-
-            _posX[i] -= nx * corrI;
-            _posY[i] -= ny * corrI;
-            _posZ[i] -= nz * corrI;
-            _posX[j] += nx * corrJ;
-            _posY[j] += ny * corrJ;
-            _posZ[j] += nz * corrJ;
-
-            // Velocity correction (impulse)
-            float dvx = _velX[j] - _velX[i];
-            float dvy = _velY[j] - _velY[i];
-            float dvz = _velZ[j] - _velZ[i];
-
-            float velAlongNormal = dvx * nx + dvy * ny + dvz * nz;
-            if (velAlongNormal > 0) return; // Separating
-
-            float impulseMag = -(1.0f + Restitution) * velAlongNormal / totalInvMass;
-
-            float impulseX = nx * impulseMag;
-            float impulseY = ny * impulseMag;
-            float impulseZ = nz * impulseMag;
-
-            _velX[i] -= impulseX * _invMass[i];
-            _velY[i] -= impulseY * _invMass[i];
-            _velZ[i] -= impulseZ * _invMass[i];
-            _velX[j] += impulseX * _invMass[j];
-            _velY[j] += impulseY * _invMass[j];
-            _velZ[j] += impulseZ * _invMass[j];
-
-            // Friction
-            float tanX = dvx - velAlongNormal * nx;
-            float tanY = dvy - velAlongNormal * ny;
-            float tanZ = dvz - velAlongNormal * nz;
-            float tanLenSq = tanX * tanX + tanY * tanY + tanZ * tanZ;
-
-            if (tanLenSq > EPSILON)
-            {
-                float tanLen = MathF.Sqrt(tanLenSq);
-                float invTanLen = 1.0f / tanLen;
-                tanX *= invTanLen;
-                tanY *= invTanLen;
-                tanZ *= invTanLen;
-
-                float frictionImpulse = Friction * impulseMag;
-                _velX[i] += tanX * frictionImpulse * _invMass[i];
-                _velY[i] += tanY * frictionImpulse * _invMass[i];
-                _velZ[i] += tanZ * frictionImpulse * _invMass[i];
-                _velX[j] -= tanX * frictionImpulse * _invMass[j];
-                _velY[j] -= tanY * frictionImpulse * _invMass[j];
-                _velZ[j] -= tanZ * frictionImpulse * _invMass[j];
-            }
-        }
-
-        #endregion
-
-        #region Boundary Collisions
-
-        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
-        private void HandleBoundaryCollisionsSimd()
-        {
-            float minX = (float)Bounds.Min.X;
-            float minY = (float)Bounds.Min.Y;
-            float minZ = (float)Bounds.Min.Z;
-            float maxX = (float)Bounds.Max.X;
-            float maxY = (float)Bounds.Max.Y;
-            float maxZ = (float)Bounds.Max.Z;
-            float restitution = Restitution;
-            float friction = 1.0f - Friction;
-
-            int count = _count;
-
-            Parallel.For(0, count, _parallelOptions, i =>
-            {
-                if ((_flags[i] & 1) == 0) return;
-
-                float r = _radius[i];
-
-                // X bounds
-                if (_posX[i] - r < minX)
-                {
-                    _posX[i] = minX + r;
-                    _velX[i] = -_velX[i] * restitution;
-                    _velY[i] *= friction;
-                    _velZ[i] *= friction;
-                }
-                else if (_posX[i] + r > maxX)
-                {
-                    _posX[i] = maxX - r;
-                    _velX[i] = -_velX[i] * restitution;
-                    _velY[i] *= friction;
-                    _velZ[i] *= friction;
-                }
-
-                // Y bounds
-                if (_posY[i] - r < minY)
-                {
-                    _posY[i] = minY + r;
-                    _velY[i] = -_velY[i] * restitution;
-                    _velX[i] *= friction;
-                    _velZ[i] *= friction;
-                }
-                else if (_posY[i] + r > maxY)
-                {
-                    _posY[i] = maxY - r;
-                    _velY[i] = -_velY[i] * restitution;
-                    _velX[i] *= friction;
-                    _velZ[i] *= friction;
-                }
-
-                // Z bounds
-                if (_posZ[i] - r < minZ)
-                {
-                    _posZ[i] = minZ + r;
-                    _velZ[i] = -_velZ[i] * restitution;
-                    _velX[i] *= friction;
-                    _velY[i] *= friction;
-                }
-                else if (_posZ[i] + r > maxZ)
-                {
-                    _posZ[i] = maxZ - r;
-                    _velZ[i] = -_velZ[i] * restitution;
-                    _velX[i] *= friction;
-                    _velY[i] *= friction;
-                }
-            });
-        }
-
         #endregion
 
         #region Lifetime Management
-
-        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
-        private void UpdateLifetimesSimd(float dt)
-        {
-            int count = _count;
-            int simdWidth = Vector<float>.Count;
-
-            var dtVec = new Vector<float>(dt);
-            var zeroVec = Vector<float>.Zero;
-
-            Parallel.For(0, (count + simdWidth - 1) / simdWidth, _parallelOptions, chunk =>
-            {
-                int start = chunk * simdWidth;
-                int end = Math.Min(start + simdWidth, count);
-
-                if (end - start == simdWidth)
-                {
-                    var lifetime = new Vector<float>(_lifetime, start);
-                    lifetime -= dtVec;
-                    lifetime.CopyTo(_lifetime, start);
-
-                    // Check for dead particles
-                    for (int i = start; i < end; i++)
-                    {
-                        if (_lifetime[i] <= 0)
-                        {
-                            _flags[i] &= unchecked((byte)~1); // Clear alive flag
-                        }
-                    }
-                }
-                else
-                {
-                    for (int i = start; i < end; i++)
-                    {
-                        _lifetime[i] -= dt;
-                        if (_lifetime[i] <= 0)
-                        {
-                            _flags[i] &= unchecked((byte)~1);
-                        }
-                    }
-                }
-            });
-        }
 
         private void UpdateAliveCount()
         {
@@ -1006,6 +548,13 @@ namespace Artemis.Particles
         /// Applies an explosion force at the given position.
         /// </summary>
         public void ApplyExplosion(Vector3 center, float force, float radius)
+            => ApplyExplosion(center, force, radius, releaseFrozen: true);
+
+        /// <summary>
+        /// Applies an explosion impulse. Sleeping particles in range are woken and,
+        /// if <paramref name="releaseFrozen"/> is set, frozen ones are released.
+        /// </summary>
+        public void ApplyExplosion(Vector3 center, float force, float radius, bool releaseFrozen)
         {
             float radiusSq = radius * radius;
 
@@ -1020,6 +569,14 @@ namespace Artemis.Particles
 
                 if (distSq < radiusSq && distSq > EPSILON)
                 {
+                    if ((_flags[i] & FlagFrozen) != 0)
+                    {
+                        if (!releaseFrozen) return;
+                        _flags[i] &= unchecked((byte)~FlagFrozen);
+                    }
+                    _flags[i] &= unchecked((byte)~FlagSleeping);
+                    _rest[i] = 0;
+
                     float dist = MathF.Sqrt(distSq);
                     float falloff = 1.0f - dist / radius;
                     float impulse = force * falloff * _invMass[i];
@@ -1047,8 +604,10 @@ namespace Artemis.Particles
                 float dz = _posZ[i] - center.Z;
                 float distSq = dx * dx + dy * dy + dz * dz;
 
-                if (distSq < radiusSq)
+                if (distSq < radiusSq && (_flags[i] & FlagFrozen) == 0)
                 {
+                    _flags[i] &= unchecked((byte)~FlagSleeping);
+                    _rest[i] = 0;
                     _velX[i] += force.X * _invMass[i];
                     _velY[i] += force.Y * _invMass[i];
                     _velZ[i] += force.Z * _invMass[i];
@@ -1081,9 +640,12 @@ namespace Artemis.Particles
         public void Compact()
         {
             int writeIndex = 0;
+            var newIndex = new int[_count];
 
             for (int readIndex = 0; readIndex < _count; readIndex++)
             {
+                newIndex[readIndex] = (_flags[readIndex] & 1) != 0 ? writeIndex : -1;
+
                 if ((_flags[readIndex] & 1) != 0)
                 {
                     if (writeIndex != readIndex)
@@ -1103,10 +665,21 @@ namespace Artemis.Particles
                         _lifetime[writeIndex] = _lifetime[readIndex];
                         _color[writeIndex] = _color[readIndex];
                         _flags[writeIndex] = _flags[readIndex];
+                        _rest[writeIndex] = _rest[readIndex];
+                        _wake[writeIndex] = _wake[readIndex];
+                        _groupOf[writeIndex] = _groupOf[readIndex];
+                        _restX[writeIndex] = _restX[readIndex];
+                        _restY[writeIndex] = _restY[readIndex];
+                        _restZ[writeIndex] = _restZ[readIndex];
                     }
                     writeIndex++;
                 }
             }
+
+            for (int i = writeIndex; i < _count; i++)
+                _groupOf[i] = -1;
+
+            RemapGroups(newIndex);
 
             _count = writeIndex;
             _aliveCount = writeIndex;
