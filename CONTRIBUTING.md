@@ -35,7 +35,9 @@ Include as much context as possible:
 
 ## Testing
 
-- Run relevant tests before opening the PR.
+- Run `dotnet test` before opening the PR. The suite lives in `tests/Artemis.Tests`.
+- Changes to the solvers or collision code should come with a test that checks the
+  behaviour against a known physical result.
 - If there are no automated tests for a change, describe how you verified behavior.
 
 ## Commits

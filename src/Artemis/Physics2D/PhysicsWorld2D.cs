@@ -24,12 +24,21 @@ namespace Artemis.Physics2D
         private readonly List<Manifold2D> _manifolds = new();
         private readonly Dictionary<(string, string), Manifold2D> _manifoldCache = new();
 
-        // Thread-safe collision detection
-        private readonly ConcurrentBag<(RigidBody2D, RigidBody2D)> _broadPhasePairs = new();
-        private readonly ConcurrentBag<Manifold2D> _detectedCollisions = new();
-
         // Spatial hash for broad phase
-        private readonly ConcurrentDictionary<long, List<int>> _spatialGrid = new();
+        private readonly Dictionary<long, List<int>> _grid = new();
+        private readonly Stack<List<int>> _cellListPool = new();
+        private readonly List<int> _largeBodies = new();
+        private readonly List<(int A, int B)> _pairs = new();
+        private (int, int)[] _cellMin = new (int, int)[64];
+        private Manifold2D?[] _narrowResults = new Manifold2D?[64];
+        private const double MaxCellsPerBody = 1024;
+        private const double CellCoordLimit = 1 << 30;
+        private const int ParallelThreshold = 256;
+        private const double ContactMatchDistance = 0.05;
+
+        // Island based sleeping
+        private int[] _islandParent = new int[64];
+        private byte[] _islandFlag = new byte[64];
         private float _cellSize = 2.0f;
         private float _invCellSize = 0.5f;
 
@@ -96,6 +105,32 @@ namespace Artemis.Physics2D
 
         /// <summary>Whether to use continuous collision detection.</summary>
         public bool UseCCD { get; set; } = true;
+
+        /// <summary>
+        /// Approach speed (m/s) below which a contact is treated as inelastic, so
+        /// resting bodies do not jitter.
+        /// </summary>
+        public double RestitutionThreshold { get; set; } = 1.0;
+
+        /// <summary>
+        /// Overlap (m) tolerated without positional correction.
+        /// </summary>
+        public double PenetrationSlop { get; set; } = 0.005;
+
+        /// <summary>
+        /// Linear speed (m/s) below which a body counts as resting.
+        /// </summary>
+        public double SleepVelocityThreshold { get; set; } = 0.05;
+
+        /// <summary>
+        /// Angular speed (rad/s) below which a body counts as resting.
+        /// </summary>
+        public double SleepAngularVelocityThreshold { get; set; } = 0.1;
+
+        /// <summary>
+        /// Time (s) a whole island has to rest before it is put to sleep.
+        /// </summary>
+        public double SleepTimeThreshold { get; set; } = 0.5;
 
         private bool _useAdvancedSolver;
 
@@ -236,8 +271,24 @@ namespace Artemis.Physics2D
             try
             {
                 _joints.RemoveAll(j => j.BodyA == body || j.BodyB == body);
+                foreach (var manifold in _manifolds)
+                {
+                    if (manifold.BodyA == body || manifold.BodyB == body)
+                        _manifoldCache.Remove(GetManifoldKey(manifold.BodyA, manifold.BodyB));
+                }
                 _manifolds.RemoveAll(m => m.BodyA == body || m.BodyB == body);
-                return _bodies.Remove(body);
+
+                bool removed = _bodies.Remove(body);
+                if (removed)
+                {
+                    // Whatever was resting on or hanging from the body lost its support.
+                    foreach (var other in _bodies)
+                    {
+                        if (other.IsSleeping)
+                            other.WakeUp();
+                    }
+                }
+                return removed;
             }
             finally { _bodiesLock.ExitWriteLock(); }
         }
@@ -309,10 +360,15 @@ namespace Artemis.Physics2D
 
         #endregion
 
-        #region Simulation (Multi-threaded)
+        #region Simulation
 
         /// <summary>
-        /// Steps the simulation forward by the given time with multi-threading.
+        /// Advances the simulation by one step.
+        /// <para>
+        /// Pipeline: forces -> velocities -> collision detection -> joint and contact
+        /// solver -> positions (with continuous collision detection for bullets) ->
+        /// penetration recovery -> sleeping.
+        /// </para>
         /// </summary>
         public void Step(double dt)
         {
@@ -321,29 +377,44 @@ namespace Artemis.Physics2D
             _bodiesLock.EnterReadLock();
             try
             {
-                // Phase 1: Build spatial grid
-                BuildSpatialGrid();
+                for (int i = 0; i < _bodies.Count; i++)
+                    _bodies[i].WorldIndex = i;
 
-                // Phase 2: Broad phase (parallel)
-                BroadPhaseParallel();
+                // Phase 1: forces and velocities
+                ApplyAreaEffectorsParallel(dt);
+                IntegrateVelocitiesParallel(dt);
 
-                // Phase 3: Narrow phase (parallel detection, sequential resolution)
-                NarrowPhaseParallel();
+                // Phase 2: collision detection
+                BroadPhase();
+                NarrowPhase();
 
-                // Phase 4: Pre-solve joints
+                // Phase 3: wake whatever is being disturbed
+                BuildIslands();
+                WakeDisturbedIslands();
+
+                // Phase 4: prepare constraints
+                // Contacts are prepared before anything is warm started: restitution
+                // depends on the approach speed, which the warm-start impulses of
+                // neighbouring contacts (and joints) would otherwise distort.
+                foreach (var manifold in _manifolds)
+                {
+                    if (manifold.IsActive && !manifold.IsTrigger)
+                        ContactSolver2D.Prepare(manifold, RestitutionThreshold);
+                }
+
                 foreach (var joint in _joints)
                 {
                     if (joint.IsActive)
                         joint.PreSolve(dt);
                 }
 
-                // Phase 5: Apply area effectors (parallel)
-                ApplyAreaEffectorsParallel(dt);
+                foreach (var manifold in _manifolds)
+                {
+                    if (manifold.IsActive && !manifold.IsTrigger)
+                        ContactSolver2D.WarmStart(manifold);
+                }
 
-                // Phase 6: Integrate velocities (parallel + SIMD)
-                IntegrateVelocitiesParallel(dt);
-
-                // Phase 7: Velocity iterations
+                // Phase 5: velocity iterations
                 for (int i = 0; i < VelocityIterations; i++)
                 {
                     foreach (var joint in _joints)
@@ -355,14 +426,16 @@ namespace Artemis.Physics2D
                     foreach (var manifold in _manifolds)
                     {
                         if (manifold.IsActive && !manifold.IsTrigger)
-                            CollisionResolver2D.ResolveCollision(manifold);
+                            ContactSolver2D.SolveVelocity(manifold);
                     }
                 }
 
-                // Phase 8: Integrate positions (parallel + SIMD)
-                IntegratePositionsParallel(dt);
+                // Phase 6: positions
+                IntegratePositions(dt);
 
-                // Phase 9: Position iterations
+                // Phase 7: penetration recovery and joint drift
+                CorrectContactPositions();
+
                 for (int i = 0; i < PositionIterations; i++)
                 {
                     bool jointsSolved = true;
@@ -372,24 +445,21 @@ namespace Artemis.Physics2D
                             jointsSolved &= joint.SolvePosition();
                     }
 
-                    foreach (var manifold in _manifolds)
-                    {
-                        if (manifold.IsActive && !manifold.IsTrigger)
-                            CollisionResolver2D.CorrectPositions(manifold);
-                    }
-
                     if (jointsSolved) break;
                 }
 
-                // Phase 10: Post-solve events
-                foreach (var manifold in _manifolds)
+                // Phase 8: Post-solve events
+                if (PostSolve != null)
                 {
-                    if (manifold.IsActive && !manifold.IsTrigger)
-                        PostSolve?.Invoke(this, new CollisionEvent2D(manifold.BodyA, manifold.BodyB, manifold));
+                    foreach (var manifold in _manifolds)
+                    {
+                        if (manifold.IsActive && !manifold.IsTrigger)
+                            PostSolve.Invoke(this, new CollisionEvent2D(manifold.BodyA, manifold.BodyB, manifold));
+                    }
                 }
 
-                // Phase 11: Sleep handling (parallel)
-                HandleSleepParallel();
+                // Phase 9: sleeping
+                UpdateSleeping(dt);
             }
             finally { _bodiesLock.ExitReadLock(); }
 
@@ -397,7 +467,7 @@ namespace Artemis.Physics2D
         }
 
         /// <summary>
-        /// Steps with fixed time step and accumulator.
+        /// Steps the simulation with fixed timestep and accumulator.
         /// </summary>
         public void StepFixed(double dt, double fixedDt = 1.0 / 60.0)
         {
@@ -413,46 +483,130 @@ namespace Artemis.Physics2D
 
         #endregion
 
-        #region Spatial Hash Grid
+        #region Broad Phase
 
-        private void BuildSpatialGrid()
+        private void BroadPhase()
         {
-            _spatialGrid.Clear();
+            foreach (var list in _grid.Values)
+            {
+                list.Clear();
+                _cellListPool.Push(list);
+            }
+            _grid.Clear();
+            _largeBodies.Clear();
+            _pairs.Clear();
 
-            for (int i = 0; i < _bodies.Count; i++)
+            int count = _bodies.Count;
+            if (_cellMin.Length < count)
+                _cellMin = new (int, int)[Math.Max(count, _cellMin.Length * 2)];
+
+            double inv = _invCellSize;
+
+            for (int i = 0; i < count; i++)
             {
                 var body = _bodies[i];
-                if (!body.IsActive) continue;
+                if (!body.IsActive || body.Shape == null) continue;
 
-                // Add body to all overlapping cells
-                int minX = (int)Math.Floor(body.AABB.Min.X * _invCellSize);
-                int maxX = (int)Math.Floor(body.AABB.Max.X * _invCellSize);
-                int minY = (int)Math.Floor(body.AABB.Min.Y * _invCellSize);
-                int maxY = (int)Math.Floor(body.AABB.Max.Y * _invCellSize);
+                var box = body.AABB;
+                double minX = Math.Floor(box.Min.X * inv), maxX = Math.Floor(box.Max.X * inv);
+                double minY = Math.Floor(box.Min.Y * inv), maxY = Math.Floor(box.Max.Y * inv);
+                double cells = (maxX - minX + 1) * (maxY - minY + 1);
 
-                for (int x = minX; x <= maxX; x++)
+                if (double.IsNaN(cells))
+                    continue;
+
+                // Very large bodies (long floors, chains) are tested against everything
+                // instead of being written into thousands of cells.
+                if (cells > MaxCellsPerBody || Math.Abs(minX) > CellCoordLimit || Math.Abs(maxX) > CellCoordLimit ||
+                    Math.Abs(minY) > CellCoordLimit || Math.Abs(maxY) > CellCoordLimit)
                 {
-                    for (int y = minY; y <= maxY; y++)
+                    _largeBodies.Add(i);
+                    continue;
+                }
+
+                _cellMin[i] = ((int)minX, (int)minY);
+
+                for (int x = (int)minX; x <= (int)maxX; x++)
+                {
+                    for (int y = (int)minY; y <= (int)maxY; y++)
                     {
-                        long cellKey = GetCellKey(x, y);
-                        _spatialGrid.AddOrUpdate(cellKey,
-                            _ => new List<int> { i },
-                            (_, list) => { lock (list) { list.Add(i); } return list; });
+                        long key = GetCellKey(x, y);
+                        if (!_grid.TryGetValue(key, out var list))
+                        {
+                            list = _cellListPool.Count > 0 ? _cellListPool.Pop() : new List<int>(8);
+                            _grid[key] = list;
+                        }
+                        list.Add(i);
                     }
                 }
             }
+
+            // Two bodies can share several cells: the pair is taken only from the first
+            // cell their ranges have in common, so each pair is produced exactly once.
+            foreach (var cell in _grid)
+            {
+                var indices = cell.Value;
+                for (int a = 0; a < indices.Count; a++)
+                {
+                    int i = indices[a];
+                    for (int b = a + 1; b < indices.Count; b++)
+                    {
+                        int j = indices[b];
+                        long firstShared = GetCellKey(
+                            Math.Max(_cellMin[i].Item1, _cellMin[j].Item1),
+                            Math.Max(_cellMin[i].Item2, _cellMin[j].Item2));
+                        if (firstShared == cell.Key)
+                            AddPairIfOverlapping(i, j);
+                    }
+                }
+            }
+
+            for (int a = 0; a < _largeBodies.Count; a++)
+            {
+                int large = _largeBodies[a];
+                for (int k = 0; k < count; k++)
+                {
+                    if (k == large) continue;
+                    if (k < large && _largeBodies.Contains(k)) continue;
+                    AddPairIfOverlapping(large, k);
+                }
+            }
+
+            // Fixed order regardless of how the grid enumerates.
+            _pairs.Sort(static (x, y) => x.A != y.A ? x.A.CompareTo(y.A) : x.B.CompareTo(y.B));
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private long GetCellKey(Vector2D pos)
+        private void AddPairIfOverlapping(int i, int j)
         {
-            int cx = (int)Math.Floor(pos.X * _invCellSize);
-            int cy = (int)Math.Floor(pos.Y * _invCellSize);
-            return GetCellKey(cx, cy);
+            var a = _bodies[i];
+            var b = _bodies[j];
+
+            if (!a.IsActive || !b.IsActive || a.Shape == null || b.Shape == null) return;
+            if (a.BodyType != BodyType2D.Dynamic && b.BodyType != BodyType2D.Dynamic)
+            {
+                // Static/kinematic pairs only matter for trigger events.
+                if (!a.IsTrigger && !b.IsTrigger) return;
+            }
+            if (!a.ShouldCollide(b)) return;
+            if (!a.AABB.Overlaps(b.AABB)) return;
+            if (!ShouldJointedBodiesCollide(a, b)) return;
+
+            _pairs.Add(i < j ? (i, j) : (j, i));
+        }
+
+        private bool ShouldJointedBodiesCollide(RigidBody2D a, RigidBody2D b)
+        {
+            foreach (var joint in _joints)
+            {
+                if (joint.CollideConnected || !joint.IsActive) continue;
+                if ((joint.BodyA == a && joint.BodyB == b) || (joint.BodyA == b && joint.BodyB == a))
+                    return false;
+            }
+            return true;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private long GetCellKey(int cx, int cy)
+        private static long GetCellKey(int cx, int cy)
         {
             unchecked
             {
@@ -462,123 +616,100 @@ namespace Artemis.Physics2D
 
         #endregion
 
-        #region Parallel Broad Phase
+        #region Narrow Phase
 
-        private void BroadPhaseParallel()
+        private void NarrowPhase()
         {
-            while (_broadPhasePairs.TryTake(out _)) { }
-
-            var cells = _spatialGrid.ToArray();
-
-            Parallel.ForEach(cells, cell =>
-            {
-                var indices = cell.Value;
-
-                // Check within cell
-                // Since bodies are registered in ALL overlapping cells, we only need to check collisions
-                // between bodies in the same cell. If two bodies overlap, they must share at least one cell.
-                // Note: This may generate duplicate pairs if bodies share multiple cells.
-                // Duplicate pairs are handled by ConcurrentBag (duplicates allowed) but checking
-                // is idempotent or should be deduplicated later.
-                // Ideally we deduplicate here, but for now we rely on the narrow phase caching or simple redundancy.
-
-                for (int i = 0; i < indices.Count; i++)
-                {
-                    for (int j = i + 1; j < indices.Count; j++)
-                    {
-                        CheckBroadPhasePair(indices[i], indices[j]);
-                    }
-                }
-            });
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void CheckBroadPhasePair(int i, int j)
-        {
-            var a = _bodies[i];
-            var b = _bodies[j];
-
-            if (!a.IsActive || !b.IsActive) return;
-            if (a.BodyType == BodyType2D.Static && b.BodyType == BodyType2D.Static) return;
-            if (a.IsSleeping && b.IsSleeping) return;
-            if (!a.ShouldCollide(b)) return;
-
-            if (a.AABB.Overlaps(b.AABB))
-                _broadPhasePairs.Add((a, b));
-        }
-
-        #endregion
-
-        #region Parallel Narrow Phase
-
-        private void NarrowPhaseParallel()
-        {
-            while (_detectedCollisions.TryTake(out _)) { }
-
             foreach (var manifold in _manifolds)
                 manifold.IsActive = false;
 
-            var pairs = _broadPhasePairs.ToArray();
+            int pairCount = _pairs.Count;
+            if (_narrowResults.Length < pairCount)
+                _narrowResults = new Manifold2D?[Math.Max(pairCount, _narrowResults.Length * 2)];
 
-            // Parallel collision detection
-            Parallel.ForEach(pairs, pair =>
+            var results = _narrowResults;
+
+            void Detect(int p)
             {
-                var (a, b) = pair;
+                var (i, j) = _pairs[p];
                 var manifold = new Manifold2D();
+                results[p] = CollisionDetector2D.DetectCollision(_bodies[i], _bodies[j], manifold) ? manifold : null;
+            }
 
-                bool hasCollision = false;
+            // Results are stored by pair index, so the outcome does not depend on
+            // thread scheduling.
+            if (pairCount >= ParallelThreshold)
+                Parallel.For(0, pairCount, Detect);
+            else
+                for (int p = 0; p < pairCount; p++) Detect(p);
 
-                // CCD for fast-moving objects
-                if (UseCCD && (a.UseCCD || b.UseCCD))
-                {
-                    hasCollision = ContinuousCollisionDetector2D.DetectSwept(a, b, manifold);
-                }
-
-                if (!hasCollision)
-                {
-                    hasCollision = CollisionDetector2D.DetectCollision(a, b, manifold);
-                }
-
-                if (hasCollision)
-                {
-                    manifold.IsActive = true;
-                    manifold.IsTrigger = a.IsTrigger || b.IsTrigger;
-                    _detectedCollisions.Add(manifold);
-                }
-            });
-
-            // Sequential collision processing (for events and cache)
-            foreach (var manifold in _detectedCollisions)
+            for (int p = 0; p < pairCount; p++)
             {
-                var key = GetManifoldKey(manifold.BodyA, manifold.BodyB);
+                var manifold = results[p];
+                results[p] = null;
+                if (manifold == null)
+                    continue;
 
-                if (!_manifoldCache.ContainsKey(key))
+                manifold.IsActive = true;
+                manifold.IsTrigger = manifold.BodyA.IsTrigger || manifold.BodyB.IsTrigger;
+
+                var a = manifold.BodyA;
+                var b = manifold.BodyB;
+                for (int i = 0; i < manifold.ContactCount; i++)
+                {
+                    manifold.Contacts[i].LocalA = a.WorldToLocal(manifold.Contacts[i].Point);
+                    manifold.Contacts[i].LocalB = b.WorldToLocal(manifold.Contacts[i].Point);
+                }
+
+                var key = GetManifoldKey(a, b);
+
+                if (!_manifoldCache.TryGetValue(key, out var cached))
                 {
                     _manifoldCache[key] = manifold;
                     _manifolds.Add(manifold);
+                    cached = manifold;
                     if (manifold.IsTrigger)
-                        TriggerEnter?.Invoke(this, new CollisionEvent2D(manifold.BodyA, manifold.BodyB, manifold));
+                        TriggerEnter?.Invoke(this, new CollisionEvent2D(a, b, manifold));
                     else
-                        CollisionBegin?.Invoke(this, new CollisionEvent2D(manifold.BodyA, manifold.BodyB, manifold));
+                        CollisionBegin?.Invoke(this, new CollisionEvent2D(a, b, manifold));
                 }
                 else
                 {
-                    var cached = _manifoldCache[key];
-                    cached.ContactCount = manifold.ContactCount;
+                    // Carry the accumulated impulses over to the matching new points
+                    // (warm starting). Points are matched in the bodies' local frames.
                     for (int i = 0; i < manifold.ContactCount; i++)
                     {
-                        cached.Contacts[i] = manifold.Contacts[i];
+                        ref var fresh = ref manifold.Contacts[i];
+                        double best = ContactMatchDistance * ContactMatchDistance;
+                        for (int k = 0; k < cached.ContactCount; k++)
+                        {
+                            ref var old = ref cached.Contacts[k];
+                            double d = Math.Min((old.LocalA - fresh.LocalA).MagnitudeSquared,
+                                                (old.LocalB - fresh.LocalB).MagnitudeSquared);
+                            if (d < best)
+                            {
+                                best = d;
+                                fresh.NormalImpulse = old.NormalImpulse;
+                                fresh.TangentImpulse = old.TangentImpulse;
+                            }
+                        }
                     }
+
+                    cached.BodyA = a;
+                    cached.BodyB = b;
+                    cached.Normal = manifold.Normal;
+                    cached.Penetration = manifold.Penetration;
+                    cached.ContactCount = manifold.ContactCount;
+                    for (int i = 0; i < manifold.ContactCount; i++)
+                        cached.Contacts[i] = manifold.Contacts[i];
                     cached.Friction = manifold.Friction;
                     cached.Restitution = manifold.Restitution;
                     cached.IsActive = true;
                     cached.IsTrigger = manifold.IsTrigger;
                 }
 
-                manifold.BodyA.WakeUp();
-                manifold.BodyB.WakeUp();
-                if (!manifold.IsTrigger)
-                    PreSolve?.Invoke(this, new CollisionEvent2D(manifold.BodyA, manifold.BodyB, manifold));
+                if (!cached.IsTrigger)
+                    PreSolve?.Invoke(this, new CollisionEvent2D(a, b, cached));
             }
 
             // Clean up ended collisions
@@ -591,8 +722,7 @@ namespace Artemis.Physics2D
                         TriggerExit?.Invoke(this, new CollisionEvent2D(manifold.BodyA, manifold.BodyB, manifold));
                     else
                         CollisionEnd?.Invoke(this, new CollisionEvent2D(manifold.BodyA, manifold.BodyB, manifold));
-                    var key = GetManifoldKey(manifold.BodyA, manifold.BodyB);
-                    _manifoldCache.Remove(key);
+                    _manifoldCache.Remove(GetManifoldKey(manifold.BodyA, manifold.BodyB));
                     _manifolds.RemoveAt(i);
                 }
             }
@@ -605,7 +735,7 @@ namespace Artemis.Physics2D
 
         #endregion
 
-        #region Parallel Integration with SIMD
+        #region Integration
 
         private void ApplyAreaEffectorsParallel(double dt)
         {
@@ -628,38 +758,231 @@ namespace Artemis.Physics2D
 
         private void IntegrateVelocitiesParallel(double dt)
         {
-            var dynamicBodies = _bodies.Where(b => b.BodyType == BodyType2D.Dynamic && b.IsActive).ToArray();
             var gravity = Gravity;
 
-            Parallel.ForEach(dynamicBodies, body =>
-            {
-                body.IntegrateVelocity(dt, gravity);
-            });
+            if (_bodies.Count >= ParallelThreshold)
+                Parallel.ForEach(_bodies, body => body.IntegrateVelocity(dt, gravity));
+            else
+                foreach (var body in _bodies) body.IntegrateVelocity(dt, gravity);
         }
 
-        private void IntegratePositionsParallel(double dt)
+        private void IntegratePositions(double dt)
         {
-            var activeBodies = _bodies.Where(b => b.IsActive).ToArray();
+            bool ccd = UseCCD;
 
-            Parallel.ForEach(activeBodies, body =>
+            foreach (var body in _bodies)
             {
-                body.IntegratePosition(dt);
-            });
+                if (!body.IsActive) continue;
+
+                // Bullets are swept against everything. Any other fast body is still
+                // swept against static and kinematic geometry, so debris from an impact
+                // cannot be knocked straight through the floor.
+                double stepTime = dt;
+                if (ccd && body.BodyType == BodyType2D.Dynamic && !body.IsSleeping)
+                    stepTime = ContinuousCollisionDetector2D.TimeOfImpact(body, _bodies, dt,
+                        againstDynamicBodies: body.IsBullet || body.UseCCD);
+
+                body.IntegratePosition(stepTime);
+            }
         }
 
-        private void HandleSleepParallel()
+        private void CorrectContactPositions()
         {
+            if (_manifolds.Count == 0) return;
+
+            foreach (var manifold in _manifolds)
+            {
+                manifold.BodyA.CorrectionLinear = Vector2D.Zero;
+                manifold.BodyA.CorrectionAngular = 0;
+                manifold.BodyB.CorrectionLinear = Vector2D.Zero;
+                manifold.BodyB.CorrectionAngular = 0;
+            }
+
+            for (int i = 0; i < PositionIterations; i++)
+            {
+                foreach (var manifold in _manifolds)
+                {
+                    if (manifold.IsActive && !manifold.IsTrigger)
+                        ContactSolver2D.SolvePosition(manifold, PenetrationSlop, 0.3, 0.25);
+                }
+            }
+
+            foreach (var manifold in _manifolds)
+            {
+                ApplyCorrection(manifold.BodyA);
+                ApplyCorrection(manifold.BodyB);
+            }
+        }
+
+        private static void ApplyCorrection(RigidBody2D body)
+        {
+            if (body.CorrectionLinear.MagnitudeSquared <= 0 && body.CorrectionAngular == 0)
+                return;
+
+            body.ApplyPositionCorrection(body.CorrectionLinear, body.CorrectionAngular);
+            body.CorrectionLinear = Vector2D.Zero;
+            body.CorrectionAngular = 0;
+        }
+
+        #endregion
+
+        #region Islands and Sleeping
+
+        private int FindRoot(int index)
+        {
+            while (_islandParent[index] != index)
+            {
+                _islandParent[index] = _islandParent[_islandParent[index]];
+                index = _islandParent[index];
+            }
+            return index;
+        }
+
+        private void Union(RigidBody2D a, RigidBody2D? b)
+        {
+            if (b == null || a.BodyType != BodyType2D.Dynamic || b.BodyType != BodyType2D.Dynamic)
+                return;
+
+            int ra = FindRoot(a.WorldIndex);
+            int rb = FindRoot(b.WorldIndex);
+            if (ra != rb)
+                _islandParent[rb] = ra;
+        }
+
+        /// <summary>
+        /// Groups dynamic bodies connected by contacts or joints. Bodies only fall
+        /// asleep or wake up together with the rest of their island.
+        /// </summary>
+        private void BuildIslands()
+        {
+            int count = _bodies.Count;
+            if (_islandParent.Length < count)
+            {
+                _islandParent = new int[Math.Max(count, _islandParent.Length * 2)];
+                _islandFlag = new byte[_islandParent.Length];
+            }
+
+            for (int i = 0; i < count; i++)
+                _islandParent[i] = i;
+
+            foreach (var manifold in _manifolds)
+            {
+                if (manifold.IsActive && !manifold.IsTrigger)
+                    Union(manifold.BodyA, manifold.BodyB);
+            }
+
+            foreach (var joint in _joints)
+            {
+                if (joint.IsActive)
+                    Union(joint.BodyA, joint.BodyB);
+            }
+        }
+
+        private bool IsResting(RigidBody2D body)
+            => body.Velocity.MagnitudeSquared < SleepVelocityThreshold * SleepVelocityThreshold &&
+               Math.Abs(body.AngularVelocity) < SleepAngularVelocityThreshold;
+
+        private static bool IsMovingKinematic(RigidBody2D? body)
+            => body != null && body.BodyType == BodyType2D.Kinematic &&
+               (body.Velocity.MagnitudeSquared > PhysicsConstants.Epsilon ||
+                Math.Abs(body.AngularVelocity) > PhysicsConstants.Epsilon);
+
+        private void FlagIfDrivenByKinematic(RigidBody2D a, RigidBody2D? b, ref bool any)
+        {
+            if (b == null) return;
+
+            RigidBody2D? driven = null;
+            if (IsMovingKinematic(a)) driven = b;
+            else if (IsMovingKinematic(b)) driven = a;
+
+            if (driven != null && driven.BodyType == BodyType2D.Dynamic)
+            {
+                _islandFlag[FindRoot(driven.WorldIndex)] = 1;
+                any = true;
+            }
+        }
+
+        private void WakeDisturbedIslands()
+        {
+            int count = _bodies.Count;
+            Array.Clear(_islandFlag, 0, count);
+            bool any = false;
+
+            for (int i = 0; i < count; i++)
+            {
+                var body = _bodies[i];
+                if (body.BodyType != BodyType2D.Dynamic || !body.IsActive || body.IsSleeping)
+                    continue;
+
+                if (!IsResting(body))
+                {
+                    _islandFlag[FindRoot(i)] = 1;
+                    any = true;
+                }
+            }
+
+            foreach (var manifold in _manifolds)
+            {
+                if (manifold.IsActive && !manifold.IsTrigger)
+                    FlagIfDrivenByKinematic(manifold.BodyA, manifold.BodyB, ref any);
+            }
+
+            foreach (var joint in _joints)
+            {
+                if (joint.IsActive)
+                    FlagIfDrivenByKinematic(joint.BodyA, joint.BodyB, ref any);
+            }
+
+            if (!any) return;
+
+            for (int i = 0; i < count; i++)
+            {
+                var body = _bodies[i];
+                if (body.IsSleeping && body.BodyType == BodyType2D.Dynamic && _islandFlag[FindRoot(i)] == 1)
+                    body.WakeUp();
+            }
+        }
+
+        private void UpdateSleeping(double dt)
+        {
+            int count = _bodies.Count;
+
             if (!AllowSleep)
             {
-                Parallel.ForEach(_bodies, body => body.IsSleeping = false);
+                for (int i = 0; i < count; i++)
+                {
+                    if (_bodies[i].IsSleeping)
+                        _bodies[i].WakeUp();
+                }
                 return;
             }
 
-            Parallel.ForEach(_bodies, body =>
+            Array.Clear(_islandFlag, 0, count);
+
+            for (int i = 0; i < count; i++)
             {
-                if (!body.CanSleep)
-                    body.IsSleeping = false;
-            });
+                var body = _bodies[i];
+                if (body.BodyType != BodyType2D.Dynamic || !body.IsActive || body.IsSleeping)
+                    continue;
+
+                if (body.CanSleep && IsResting(body))
+                    body.SleepTimer += dt;
+                else
+                    body.SleepTimer = 0;
+
+                if (body.SleepTimer < SleepTimeThreshold)
+                    _islandFlag[FindRoot(i)] = 1;
+            }
+
+            for (int i = 0; i < count; i++)
+            {
+                var body = _bodies[i];
+                if (body.BodyType == BodyType2D.Dynamic && body.IsActive && !body.IsSleeping &&
+                    _islandFlag[FindRoot(i)] == 0)
+                {
+                    body.Sleep();
+                }
+            }
         }
 
         #endregion
@@ -838,57 +1161,150 @@ namespace Artemis.Physics2D
     }
 
     /// <summary>
-    /// Continuous collision detection for 2D.
+    /// Continuous collision detection for fast-moving 2D bodies.
     /// </summary>
     public static class ContinuousCollisionDetector2D
     {
+        /// <summary>
+        /// Detects a collision between two bodies. Kept for API compatibility: tunnelling
+        /// is prevented by <see cref="TimeOfImpact"/>, which the world applies while
+        /// integrating positions.
+        /// </summary>
         public static bool DetectSwept(RigidBody2D bodyA, RigidBody2D bodyB, Manifold2D manifold)
+            => CollisionDetector2D.DetectCollision(bodyA, bodyB, manifold);
+
+        /// <summary>
+        /// Distance from a point to the surface of a body's shape (0 inside solid shapes).
+        /// </summary>
+        public static double DistanceToBody(Vector2D point, RigidBody2D body)
         {
-            // For circles, use swept circle collision
-            if (bodyA.Shape is CircleShape circleA && bodyB.Shape is CircleShape circleB)
+            if (body.Shape is CircleShape circle)
             {
-                return SweptCircleCircle(bodyA, bodyB, circleA, circleB, manifold);
+                var center = body.Position + Vector2D.Rotate(circle.Offset, body.Rotation);
+                return Math.Max(0, (point - center).Magnitude - circle.Radius);
             }
 
-            // Fall back to discrete for other shapes
-            return CollisionDetector2D.DetectCollision(bodyA, bodyB, manifold);
+            if (body.Shape is ChainShape chain)
+            {
+                double best = double.PositiveInfinity;
+                for (int i = 0; i < chain.EdgeCount; i++)
+                {
+                    best = Math.Min(best, DistanceToSegment(point,
+                        body.LocalToWorld(chain.Vertices[i]),
+                        body.LocalToWorld(chain.Vertices[(i + 1) % chain.VertexCount])));
+                }
+                return best;
+            }
+
+            var vertices = CollisionDetector2D.GetConvexWorldVertices(body);
+            if (vertices != null)
+            {
+                if (vertices.Length >= 3 && CollisionDetector2D.PointInPolygon(point, vertices))
+                    return 0;
+
+                double best = double.PositiveInfinity;
+                int edges = vertices.Length == 2 ? 1 : vertices.Length;
+                for (int i = 0; i < edges; i++)
+                    best = Math.Min(best, DistanceToSegment(point, vertices[i], vertices[(i + 1) % vertices.Length]));
+                return best;
+            }
+
+            var box = body.AABB;
+            double dx = Math.Max(0, Math.Max(box.Min.X - point.X, point.X - box.Max.X));
+            double dy = Math.Max(0, Math.Max(box.Min.Y - point.Y, point.Y - box.Max.Y));
+            return Math.Sqrt(dx * dx + dy * dy);
         }
 
-        private static bool SweptCircleCircle(RigidBody2D bodyA, RigidBody2D bodyB,
-            CircleShape circleA, CircleShape circleB, Manifold2D manifold)
+        private static double DistanceToSegment(Vector2D point, Vector2D a, Vector2D b)
         {
-            var centerA = bodyA.Position + Vector2D.Rotate(circleA.Offset, bodyA.Rotation);
-            var centerB = bodyB.Position + Vector2D.Rotate(circleB.Offset, bodyB.Rotation);
+            var ab = b - a;
+            double lengthSq = ab.MagnitudeSquared;
+            double t = lengthSq > PhysicsConstants.Epsilon ? Math.Clamp(Vector2D.Dot(point - a, ab) / lengthSq, 0, 1) : 0;
+            return (point - (a + ab * t)).Magnitude;
+        }
 
-            var relVel = bodyA.Velocity - bodyB.Velocity;
-            var centerDiff = centerB - centerA;
-            double radiusSum = circleA.Radius + circleB.Radius;
+        /// <summary>
+        /// Conservative advancement of the body's core circle against the other bodies.
+        /// Returns the part of <paramref name="dt"/> the body can travel before it would
+        /// pass through something; the contact solver handles the impact on the next step.
+        /// Bodies that move less than their core radius per step are not swept at all.
+        /// </summary>
+        /// <param name="body">The moving body (circle or box).</param>
+        /// <param name="bodies">All bodies of the world.</param>
+        /// <param name="dt">Step duration.</param>
+        /// <param name="againstDynamicBodies">Also sweep against other dynamic bodies.</param>
+        public static double TimeOfImpact(RigidBody2D body, IReadOnlyList<RigidBody2D> bodies, double dt,
+            bool againstDynamicBodies = true)
+        {
+            double coreRadius;
+            var start = body.Position;
 
-            double a = relVel.MagnitudeSquared;
-            double b = -2 * Vector2D.Dot(relVel, centerDiff);
-            double c = centerDiff.MagnitudeSquared - radiusSum * radiusSum;
-
-            // Already overlapping
-            if (c < 0)
+            switch (body.Shape)
             {
-                return CollisionDetector2D.CircleVsCircle(bodyA, bodyB, manifold);
+                case CircleShape circle:
+                    coreRadius = circle.Radius;
+                    start += Vector2D.Rotate(circle.Offset, body.Rotation);
+                    break;
+                case BoxShape box:
+                    coreRadius = Math.Min(box.HalfWidth, box.HalfHeight);
+                    start += Vector2D.Rotate(box.Offset, body.Rotation);
+                    break;
+                default:
+                    return dt;
             }
 
-            if (Math.Abs(a) < 1e-8)
-                return false;
+            var velocity = body.Velocity;
+            if (coreRadius <= 0 || velocity.Magnitude * dt <= coreRadius)
+                return dt;
 
-            double discriminant = b * b - 4 * a * c;
-            if (discriminant < 0)
-                return false;
+            const double tolerance = 1e-4;
+            double earliest = dt;
 
-            double sqrtD = Math.Sqrt(discriminant);
-            double t = (-b - sqrtD) / (2 * a);
+            for (int index = 0; index < bodies.Count; index++)
+            {
+                var other = bodies[index];
+                if (ReferenceEquals(other, body) || !other.IsActive || other.Shape == null || other.IsTrigger)
+                    continue;
+                if (!againstDynamicBodies && other.BodyType == BodyType2D.Dynamic)
+                    continue;
+                if (!body.ShouldCollide(other))
+                    continue;
 
-            if (t < 0 || t > 1)
-                return false;
+                var otherVelocity = other.BodyType == BodyType2D.Static || other.IsSleeping
+                    ? Vector2D.Zero
+                    : other.Velocity;
+                var relativeVelocity = velocity - otherVelocity;
+                double relativeSpeed = relativeVelocity.Magnitude;
+                if (relativeSpeed < PhysicsConstants.Epsilon)
+                    continue;
 
-            // Collision will happen, use discrete detection at TOI
-            return CollisionDetector2D.CircleVsCircle(bodyA, bodyB, manifold);
+                // Cheap reject: the swept core must come near the other body's bounds.
+                var bounds = other.AABB;
+                var end = start + relativeVelocity * dt;
+                if (Math.Max(start.X, end.X) + coreRadius < bounds.Min.X || Math.Min(start.X, end.X) - coreRadius > bounds.Max.X ||
+                    Math.Max(start.Y, end.Y) + coreRadius < bounds.Min.Y || Math.Min(start.Y, end.Y) - coreRadius > bounds.Max.Y)
+                    continue;
+
+                double t = 0;
+                for (int iteration = 0; iteration < 32 && t < earliest; iteration++)
+                {
+                    double distance = DistanceToBody(start + relativeVelocity * t, other) - coreRadius;
+                    if (distance <= tolerance)
+                    {
+                        // Touching at the start of the step is left to the discrete solver.
+                        if (iteration > 0)
+                        {
+                            double overshoot = Math.Min(0.25 * coreRadius, 0.01) / relativeSpeed;
+                            earliest = Math.Min(earliest, t + overshoot);
+                        }
+                        break;
+                    }
+
+                    t += distance / relativeSpeed;
+                }
+            }
+
+            return earliest;
         }
     }
 }

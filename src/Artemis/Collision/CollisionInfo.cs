@@ -1,3 +1,4 @@
+using System;
 using Artemis.Bodies;
 using Artemis.Core;
 
@@ -39,6 +40,33 @@ namespace Artemis.Collision
         public bool HasCollision;
 
         /// <summary>
+        /// Individual manifold points when the shapes touch over an area (for example
+        /// a box lying on a face). <c>null</c> when <see cref="ContactPoint"/> is the
+        /// only contact.
+        /// </summary>
+        public ManifoldPoint[]? Contacts;
+
+        /// <summary>
+        /// Number of contact points in the manifold (0 when there is no collision).
+        /// </summary>
+        public readonly int ContactCount
+            => !HasCollision ? 0 : Contacts is { Length: > 0 } ? Contacts.Length : 1;
+
+        /// <summary>
+        /// Gets a manifold point. Index 0 is always valid for a collision.
+        /// </summary>
+        public readonly ManifoldPoint GetContact(int index)
+        {
+            if (Contacts is { Length: > 0 })
+                return Contacts[index];
+
+            if (index != 0)
+                throw new ArgumentOutOfRangeException(nameof(index));
+
+            return new ManifoldPoint { Position = ContactPoint, Penetration = Penetration };
+        }
+
+        /// <summary>
         /// Creates a collision info indicating no collision.
         /// </summary>
         public static CollisionInfo NoCollision => new() { HasCollision = false };
@@ -65,6 +93,39 @@ namespace Artemis.Collision
         }
 
         /// <summary>
+        /// Creates a collision info from a multi-point manifold. The summary fields
+        /// hold the deepest penetration and the centroid of the points.
+        /// </summary>
+        public static CollisionInfo Create(
+            IPhysicsBody bodyA,
+            IPhysicsBody bodyB,
+            Vector3D normal,
+            ManifoldPoint[] contacts)
+        {
+            if (contacts == null || contacts.Length == 0)
+                throw new ArgumentException("A manifold needs at least one contact point.", nameof(contacts));
+
+            var centroid = Vector3D.Zero;
+            double deepest = double.MinValue;
+            foreach (var contact in contacts)
+            {
+                centroid += contact.Position;
+                deepest = Math.Max(deepest, contact.Penetration);
+            }
+
+            return new CollisionInfo
+            {
+                BodyA = bodyA,
+                BodyB = bodyB,
+                Normal = normal,
+                Penetration = deepest,
+                ContactPoint = centroid / contacts.Length,
+                Contacts = contacts.Length > 1 ? contacts : null,
+                HasCollision = true
+            };
+        }
+
+        /// <summary>
         /// Returns a collision info with bodies swapped.
         /// </summary>
         public readonly CollisionInfo Swapped()
@@ -76,6 +137,7 @@ namespace Artemis.Collision
                 Normal = -Normal,
                 Penetration = Penetration,
                 ContactPoint = ContactPoint,
+                Contacts = Contacts,
                 HasCollision = HasCollision
             };
         }
@@ -84,6 +146,22 @@ namespace Artemis.Collision
             => HasCollision
                 ? $"Collision(Normal: {Normal}, Depth: {Penetration:F4}, Contact: {ContactPoint})"
                 : "NoCollision";
+    }
+
+    /// <summary>
+    /// One point of a collision manifold.
+    /// </summary>
+    public struct ManifoldPoint
+    {
+        /// <summary>
+        /// Contact position in world coordinates.
+        /// </summary>
+        public Vector3D Position;
+
+        /// <summary>
+        /// Penetration depth at this point (positive if overlapping).
+        /// </summary>
+        public double Penetration;
     }
 
     /// <summary>

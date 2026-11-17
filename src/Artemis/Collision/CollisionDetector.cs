@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Artemis.Bodies;
 using Artemis.Core;
 
@@ -97,7 +98,7 @@ namespace Artemis.Collision
             );
 
             // Check if sphere center is inside the box
-            bool inside = localCenter == closestLocal;
+            bool inside = (localCenter - closestLocal).MagnitudeSquared < PhysicsConstants.Epsilon;
 
             Vector3D normal;
             double penetration;
@@ -129,29 +130,31 @@ namespace Artemis.Collision
                 switch (minAxis)
                 {
                     case 0:
-                        localNormal = new Vector3D(Math.Sign(localCenter.X), 0, 0);
+                        localNormal = new Vector3D(SignNonZero(localCenter.X), 0, 0);
                         closestLocal = new Vector3D(
-                            Math.Sign(localCenter.X) * box.HalfExtents.X,
+                            SignNonZero(localCenter.X) * box.HalfExtents.X,
                             localCenter.Y,
                             localCenter.Z);
                         break;
                     case 1:
-                        localNormal = new Vector3D(0, Math.Sign(localCenter.Y), 0);
+                        localNormal = new Vector3D(0, SignNonZero(localCenter.Y), 0);
                         closestLocal = new Vector3D(
                             localCenter.X,
-                            Math.Sign(localCenter.Y) * box.HalfExtents.Y,
+                            SignNonZero(localCenter.Y) * box.HalfExtents.Y,
                             localCenter.Z);
                         break;
                     case 2:
-                        localNormal = new Vector3D(0, 0, Math.Sign(localCenter.Z));
+                        localNormal = new Vector3D(0, 0, SignNonZero(localCenter.Z));
                         closestLocal = new Vector3D(
                             localCenter.X,
                             localCenter.Y,
-                            Math.Sign(localCenter.Z) * box.HalfExtents.Z);
+                            SignNonZero(localCenter.Z) * box.HalfExtents.Z);
                         break;
                 }
 
-                normal = box.Transform.TransformDirection(localNormal);
+                // The collision normal points from A (the sphere) to B (the box),
+                // i.e. opposite to the direction that pushes the sphere out.
+                normal = -box.Transform.TransformDirection(localNormal);
                 penetration = sphere.Radius + minDist;
                 contactPoint = box.Transform.TransformPoint(closestLocal);
             }
@@ -165,7 +168,7 @@ namespace Artemis.Collision
                     return CollisionInfo.NoCollision;
 
                 var localNormal = delta / distance;
-                normal = box.Transform.TransformDirection(localNormal);
+                normal = -box.Transform.TransformDirection(localNormal);
                 penetration = sphere.Radius - distance;
                 contactPoint = box.Transform.TransformPoint(closestLocal);
             }
@@ -177,16 +180,22 @@ namespace Artemis.Collision
 
         #region Box-Box (SAT)
 
+        // Face axes are preferred over edge axes unless the edge axis is clearly
+        // shallower. Face contacts give a full manifold, which keeps resting and
+        // stacked boxes stable.
+        private const double EdgeAxisRelativeTolerance = 0.95;
+        private const double EdgeAxisAbsoluteTolerance = 0.01;
+
         /// <summary>
-        /// Detects collision between two boxes using the Separating Axis Theorem.
+        /// Detects collision between two boxes using the Separating Axis Theorem and
+        /// builds a contact manifold (up to four points for face contacts, one point
+        /// for edge-edge contacts).
         /// </summary>
         public static CollisionInfo BoxBox(RigidBody boxA, RigidBody boxB)
         {
-            // Get box orientations
             var rotA = Matrix3x3.FromQuaternion(boxA.Rotation);
             var rotB = Matrix3x3.FromQuaternion(boxB.Rotation);
 
-            // Get axes for both boxes
             var axesA = new Vector3D[]
             {
                 new(rotA.M00, rotA.M10, rotA.M20),
@@ -205,51 +214,257 @@ namespace Artemis.Collision
             var halfB = boxB.HalfExtents;
             var t = boxB.Position - boxA.Position;
 
-            double minPenetration = double.MaxValue;
-            Vector3D minAxis = Vector3D.Zero;
-            int minAxisType = -1;
+            double facePenetration = double.MaxValue;
+            Vector3D faceAxis = Vector3D.Zero;
+            int faceAxisType = -1;
 
-            // Test face axes of A
             for (int i = 0; i < 3; i++)
             {
                 if (!TestAxis(axesA[i], halfA, halfB, axesA, axesB, t,
-                    ref minPenetration, ref minAxis, ref minAxisType, i))
+                    ref facePenetration, ref faceAxis, ref faceAxisType, i))
                     return CollisionInfo.NoCollision;
             }
 
-            // Test face axes of B
             for (int i = 0; i < 3; i++)
             {
                 if (!TestAxis(axesB[i], halfA, halfB, axesA, axesB, t,
-                    ref minPenetration, ref minAxis, ref minAxisType, i + 3))
+                    ref facePenetration, ref faceAxis, ref faceAxisType, i + 3))
                     return CollisionInfo.NoCollision;
             }
 
-            // Test edge axes (cross products)
+            double edgePenetration = double.MaxValue;
+            Vector3D edgeAxis = Vector3D.Zero;
+            int edgeAxisType = -1;
+
             for (int i = 0; i < 3; i++)
             {
                 for (int j = 0; j < 3; j++)
                 {
                     var axis = Vector3D.Cross(axesA[i], axesB[j]);
-                    if (axis.MagnitudeSquared < PhysicsConstants.Epsilon)
-                        continue;
+                    if (axis.MagnitudeSquared < 1e-8)
+                        continue; // Parallel edges: already covered by the face axes.
 
                     axis = axis.Normalized;
                     if (!TestAxis(axis, halfA, halfB, axesA, axesB, t,
-                        ref minPenetration, ref minAxis, ref minAxisType, 6 + i * 3 + j))
+                        ref edgePenetration, ref edgeAxis, ref edgeAxisType, 6 + i * 3 + j))
                         return CollisionInfo.NoCollision;
                 }
             }
 
-            // Ensure normal points from A to B
-            if (Vector3D.Dot(minAxis, t) < 0)
-                minAxis = -minAxis;
+            bool useEdge = edgeAxisType >= 0 &&
+                           edgePenetration < facePenetration * EdgeAxisRelativeTolerance - EdgeAxisAbsoluteTolerance;
 
-            // Calculate contact point (simplified - center of overlap region)
-            var contactPoint = (boxA.Position + boxB.Position) * 0.5;
+            if (useEdge)
+            {
+                var normal = Vector3D.Dot(edgeAxis, t) < 0 ? -edgeAxis : edgeAxis;
+                int edgeA = (edgeAxisType - 6) / 3;
+                int edgeB = (edgeAxisType - 6) % 3;
 
-            return CollisionInfo.Create(boxA, boxB, minAxis, minPenetration, contactPoint);
+                // Supporting edges: the edge of A furthest along the normal and the
+                // edge of B furthest against it.
+                var pointA = boxA.Position;
+                var pointB = boxB.Position;
+                for (int k = 0; k < 3; k++)
+                {
+                    if (k != edgeA)
+                        pointA += axesA[k] * (SignNonZero(Vector3D.Dot(axesA[k], normal)) * Component(halfA, k));
+                    if (k != edgeB)
+                        pointB -= axesB[k] * (SignNonZero(Vector3D.Dot(axesB[k], normal)) * Component(halfB, k));
+                }
+
+                ClosestPointsOnLines(pointA, axesA[edgeA], Component(halfA, edgeA),
+                    pointB, axesB[edgeB], Component(halfB, edgeB), out var onA, out var onB);
+
+                return CollisionInfo.Create(boxA, boxB, normal, edgePenetration, (onA + onB) * 0.5);
+            }
+
+            // Face contact: clip the incident face against the reference face.
+            bool referenceIsA = faceAxisType < 3;
+            var refBody = referenceIsA ? boxA : boxB;
+            var incBody = referenceIsA ? boxB : boxA;
+            var refAxes = referenceIsA ? axesA : axesB;
+            var incAxes = referenceIsA ? axesB : axesA;
+            var refHalf = referenceIsA ? halfA : halfB;
+            var incHalf = referenceIsA ? halfB : halfA;
+            int refIndex = referenceIsA ? faceAxisType : faceAxisType - 3;
+
+            // Reference face normal, pointing towards the incident box.
+            var toIncident = incBody.Position - refBody.Position;
+            var refNormal = refAxes[refIndex];
+            if (Vector3D.Dot(refNormal, toIncident) < 0)
+                refNormal = -refNormal;
+
+            var collisionNormal = referenceIsA ? refNormal : -refNormal;
+
+            // Incident face: the face of the other box most opposed to the reference normal.
+            int incIndex = 0;
+            double mostOpposed = double.MaxValue;
+            double incSign = 1;
+            for (int k = 0; k < 3; k++)
+            {
+                double d = Vector3D.Dot(incAxes[k], refNormal);
+                if (-Math.Abs(d) < mostOpposed)
+                {
+                    mostOpposed = -Math.Abs(d);
+                    incIndex = k;
+                    incSign = d > 0 ? -1 : 1;
+                }
+            }
+
+            int incU = (incIndex + 1) % 3;
+            int incV = (incIndex + 2) % 3;
+            var incCenter = incBody.Position + incAxes[incIndex] * (incSign * Component(incHalf, incIndex));
+            var eu = incAxes[incU] * Component(incHalf, incU);
+            var ev = incAxes[incV] * Component(incHalf, incV);
+
+            var polygon = new List<Vector3D>(8)
+            {
+                incCenter + eu + ev,
+                incCenter - eu + ev,
+                incCenter - eu - ev,
+                incCenter + eu - ev
+            };
+            var scratch = new List<Vector3D>(8);
+
+            int refU = (refIndex + 1) % 3;
+            int refV = (refIndex + 2) % 3;
+            ClipPolygon(polygon, scratch, refAxes[refU], Vector3D.Dot(refAxes[refU], refBody.Position) + Component(refHalf, refU));
+            ClipPolygon(polygon, scratch, -refAxes[refU], -Vector3D.Dot(refAxes[refU], refBody.Position) + Component(refHalf, refU));
+            ClipPolygon(polygon, scratch, refAxes[refV], Vector3D.Dot(refAxes[refV], refBody.Position) + Component(refHalf, refV));
+            ClipPolygon(polygon, scratch, -refAxes[refV], -Vector3D.Dot(refAxes[refV], refBody.Position) + Component(refHalf, refV));
+
+            double refPlane = Vector3D.Dot(refNormal, refBody.Position) + Component(refHalf, refIndex);
+
+            var points = new List<ManifoldPoint>(polygon.Count);
+            foreach (var vertex in polygon)
+            {
+                double depth = refPlane - Vector3D.Dot(refNormal, vertex);
+                if (depth >= 0)
+                    points.Add(new ManifoldPoint { Position = vertex, Penetration = depth });
+            }
+
+            if (points.Count == 0)
+            {
+                // Numerically degenerate overlap: fall back to a single point between
+                // the two faces so the pair is still resolved.
+                var fallback = incCenter + refNormal * (0.5 * facePenetration);
+                return CollisionInfo.Create(boxA, boxB, collisionNormal, facePenetration, fallback);
+            }
+
+            return CollisionInfo.Create(boxA, boxB, collisionNormal, ReduceManifold(points));
         }
+
+        /// <summary>
+        /// Sutherland-Hodgman clip of a convex polygon against the half space
+        /// <c>dot(normal, p) &lt;= offset</c>.
+        /// </summary>
+        private static void ClipPolygon(List<Vector3D> polygon, List<Vector3D> scratch, Vector3D normal, double offset)
+        {
+            if (polygon.Count == 0)
+                return;
+
+            scratch.Clear();
+            var previous = polygon[polygon.Count - 1];
+            double previousDistance = Vector3D.Dot(normal, previous) - offset;
+
+            foreach (var current in polygon)
+            {
+                double currentDistance = Vector3D.Dot(normal, current) - offset;
+
+                if (currentDistance <= 0)
+                {
+                    if (previousDistance > 0)
+                        scratch.Add(previous + (current - previous) * (previousDistance / (previousDistance - currentDistance)));
+                    scratch.Add(current);
+                }
+                else if (previousDistance <= 0)
+                {
+                    scratch.Add(previous + (current - previous) * (previousDistance / (previousDistance - currentDistance)));
+                }
+
+                previous = current;
+                previousDistance = currentDistance;
+            }
+
+            polygon.Clear();
+            polygon.AddRange(scratch);
+        }
+
+        /// <summary>
+        /// Keeps at most four manifold points: the deepest one plus the three that
+        /// span the largest area around it.
+        /// </summary>
+        private static ManifoldPoint[] ReduceManifold(List<ManifoldPoint> points)
+        {
+            const int max = ContactManifold.MaxContacts;
+            if (points.Count <= max)
+                return points.ToArray();
+
+            var result = new ManifoldPoint[max];
+            var used = new bool[points.Count];
+
+            int first = 0;
+            for (int i = 1; i < points.Count; i++)
+                if (points[i].Penetration > points[first].Penetration) first = i;
+            result[0] = points[first];
+            used[first] = true;
+
+            for (int n = 1; n < max; n++)
+            {
+                int best = -1;
+                double bestScore = -1;
+                for (int i = 0; i < points.Count; i++)
+                {
+                    if (used[i]) continue;
+
+                    // Distance to the closest point already chosen.
+                    double score = double.MaxValue;
+                    for (int k = 0; k < n; k++)
+                        score = Math.Min(score, (points[i].Position - result[k].Position).MagnitudeSquared);
+
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        best = i;
+                    }
+                }
+
+                result[n] = points[best];
+                used[best] = true;
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Closest points between two segments given by centre, unit direction and half length.
+        /// </summary>
+        private static void ClosestPointsOnLines(
+            Vector3D centerA, Vector3D dirA, double halfLengthA,
+            Vector3D centerB, Vector3D dirB, double halfLengthB,
+            out Vector3D onA, out Vector3D onB)
+        {
+            var r = centerA - centerB;
+            double b = Vector3D.Dot(dirA, dirB);
+            double d = Vector3D.Dot(dirA, r);
+            double e = Vector3D.Dot(dirB, r);
+            double denom = 1.0 - b * b;
+
+            double sA = 0, sB;
+            if (denom > 1e-9)
+                sA = Math.Clamp((b * e - d) / denom, -halfLengthA, halfLengthA);
+
+            sB = Math.Clamp(b * sA + e, -halfLengthB, halfLengthB);
+            sA = Math.Clamp(b * sB - d, -halfLengthA, halfLengthA);
+
+            onA = centerA + dirA * sA;
+            onB = centerB + dirB * sB;
+        }
+
+        private static double Component(Vector3D v, int index)
+            => index == 0 ? v.X : index == 1 ? v.Y : v.Z;
+
+        private static double SignNonZero(double value) => value < 0 ? -1.0 : 1.0;
 
         private static bool TestAxis(
             Vector3D axis,
@@ -285,6 +500,36 @@ namespace Artemis.Collision
             return halfExtents.X * Math.Abs(Vector3D.Dot(axes[0], axis)) +
                    halfExtents.Y * Math.Abs(Vector3D.Dot(axes[1], axis)) +
                    halfExtents.Z * Math.Abs(Vector3D.Dot(axes[2], axis));
+        }
+
+        #endregion
+
+        #region Distance Queries
+
+        /// <summary>
+        /// Distance from a point to the surface of a body's collision shape.
+        /// Returns 0 when the point is inside the shape.
+        /// </summary>
+        public static double DistanceToBody(Vector3D point, IPhysicsBody body)
+        {
+            if (body is RigidBody rb)
+            {
+                switch (rb.ShapeType)
+                {
+                    case CollisionShapeType.Sphere:
+                        return Math.Max(0, (point - rb.Position).Magnitude - rb.Radius);
+
+                    case CollisionShapeType.Box:
+                        var local = rb.Transform.InverseTransformPoint(point);
+                        var h = rb.HalfExtents;
+                        double dx = Math.Max(0, Math.Abs(local.X) - h.X);
+                        double dy = Math.Max(0, Math.Abs(local.Y) - h.Y);
+                        double dz = Math.Max(0, Math.Abs(local.Z) - h.Z);
+                        return Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                }
+            }
+
+            return Math.Sqrt(body.BoundingBox.DistanceSquared(point));
         }
 
         #endregion

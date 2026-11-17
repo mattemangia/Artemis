@@ -6,7 +6,7 @@
 
 A high-performance, multi-threaded physics engine for C# with GPU acceleration, SIMD optimization, and comprehensive 2D/3D simulation capabilities.
 
-[![.NET](https://img.shields.io/badge/.NET-6.0%2F7.0%2F8.0-blue)](https://dotnet.microsoft.com)
+[![.NET](https://img.shields.io/badge/.NET-10.0-blue)](https://dotnet.microsoft.com)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 ---
@@ -47,6 +47,7 @@ A high-performance, multi-threaded physics engine for C# with GPU acceleration, 
 - [Advanced Topics](#advanced-topics)
 - [Slope Stability](#slope-stability)
 - [API Reference](#api-reference)
+- [Testing](#testing)
 - [Citation](#citation)
 - [Author](#author)
 
@@ -85,7 +86,7 @@ dotnet add package Artemis.Physics
 ```
 
 ### Requirements
-- .NET 6.0, 7.0, or 8.0
+- .NET 10 SDK (the core library also targets .NET Standard 2.1)
 - Optional: GPU with OpenCL/CUDA support for acceleration
 
 ---
@@ -628,6 +629,85 @@ foreach (var p in particles)
 // Cleanup settled particles
 sand.ClearSettled();
 ```
+
+### Mesh to Sand (up to 1M+ grains)
+
+`MassiveParticleSystem` can rebuild a mesh out of grains. The grains start *frozen*:
+they hold the shape and cost almost nothing until they are released, after which they
+behave like sand (Coulomb friction, heaps with a natural slope) and fall asleep again
+once they come to rest.
+
+```csharp
+using System.Numerics;
+using Artemis.Core;
+using Artemis.Particles;
+
+var sand = new MassiveParticleSystem(
+    capacity: 1_000_000,
+    bounds: new AABB(new Vector3D(-40, 0, -40), new Vector3D(40, 80, 40)))
+{
+    Friction = 0.5f          // slope of the heaps: about atan(friction)
+};
+
+// Any closed mesh: an OBJ file, or one built in code.
+var statue = TriangleMesh.LoadObj("statue.obj").Transform(scale: 1f, offset: Vector3.Zero);
+
+// One grain per (2 * radius)^3 of volume. solid: false covers only the surface.
+int grains = sand.SpawnFromMesh(statue, particleRadius: 0.05f, out int first);
+
+// Let it go: all at once...
+sand.ReleaseAll();
+// ...or progressively (from the top down, around a point, by any rule)
+sand.ReleaseBeyondPlane(Vector3.UnitY, offset: 12.0f);
+sand.ReleaseInRadius(new Vector3(0, 5, 0), radius: 2f);
+sand.ReleaseWhere((x, y, z) => x > 0);
+
+// ...or let impacts knock grains loose, and blow it away.
+sand.FrozenBreakSpeed = 3f;                                   // m/s
+sand.ApplyExplosion(new Vector3(0, 5, 0), force: 20f, radius: 4f);
+
+sand.Update(1f / 60f);       // 4 sub-steps by default
+Console.WriteLine($"{sand.ActiveCount} moving, {sand.SleepingCount} asleep, {sand.FrozenCount} frozen");
+```
+
+Cost depends on how many grains are *moving*, not on how many exist. On a 4-core
+machine a frozen one-million-grain statue costs about 20 ms per frame, and about 0.4 s
+per frame while all one million grains are in motion at once; a crumbling front or a
+settled heap is in between. Fewer sub-steps (`Update(dt, subSteps: 2)`) halve the cost
+at the price of softer piles.
+
+### Objects that Shatter
+
+A mesh can also become a *rigid group*: its particles move together as one solid
+object, which breaks into smaller rigid fragments when an impact changes its velocity
+by more than its break speed - a glass falling on the floor.
+
+```csharp
+var world = new MassiveParticleSystem(200_000,
+    new AABB(new Vector3D(-2, 0, -2), new Vector3D(2, 5, 2))) { Friction = 0.4f };
+
+// A drinking glass: outer profile as (radius, height) points, 4 mm walls, 1 m up.
+var profile = new List<Vector2> { new(0.025f, 0), new(0.03f, 0.02f), new(0.035f, 0.10f) };
+var glass = TriangleMesh.CreateLathe(profile, segments: 48, wallThickness: 0.004f)
+    .Transform(1f, new Vector3(0, 1.0f, 0));
+
+// The particle radius must not exceed half the wall thickness.
+world.SpawnRigidBodyFromMesh(glass, particleRadius: 0.002f, breakSpeed: 2.0f,
+    out int glassId, mass: 0.001f);
+
+world.ShatterFragments = 24;        // pieces per break, smaller near the impact
+world.MaxShatterDepth = 2;          // fragments may break again, twice
+world.GroupShattered += (id, point, pieces) =>
+    Console.WriteLine($"Object {id} broke into {pieces} pieces at {point}");
+
+world.SetGroupVelocity(glassId, linear: new Vector3(0.5f, 0, 0), angular: new Vector3(0, 0, 4));
+world.Update(1f / 60f);
+```
+
+A fall from height *h* lands at `sqrt(2 g h)` (4.4 m/s from one metre), so a break
+speed of 2 m/s survives being put down and breaks when dropped from about 20 cm.
+Loose grains, frozen statues and rigid objects all live in the same system and collide
+with each other.
 
 ### Sand Sculpture from OBJ + Blow-Away Effects
 
@@ -1227,6 +1307,39 @@ world.OnCollision += (info) => {
 };
 ```
 
+### Contact Manifolds and the Contact Solver
+
+Shapes that touch over an area report several contact points. A box lying on a
+face produces up to four points in 3D and two in 2D; this is what lets boxes rest
+flat and stack instead of balancing on a single point.
+
+```csharp
+world.OnCollision += (info) => {
+    for (int i = 0; i < info.ContactCount; i++)
+    {
+        ManifoldPoint point = info.GetContact(i);
+        Vector3D position = point.Position;
+        double depth = point.Penetration;
+    }
+};
+```
+
+Both worlds resolve all contacts of a step together with a sequential-impulse
+solver (`ContactSolver` in 3D, `ContactSolver2D` in 2D): impulses are accumulated
+and clamped per contact, friction follows Coulomb's law, the previous step's
+impulses are reused as a starting point (warm starting), and leftover overlap is
+removed positionally so it does not add energy.
+
+```csharp
+world.SolverIterations = 12;      // velocity iterations: higher = stiffer stacks
+world.PositionIterations = 4;     // penetration recovery iterations
+world.RestitutionThreshold = 1.0; // approach speed (m/s) below which nothing bounces
+world.UseCCD = true;              // stop fast spheres/boxes at their time of impact
+```
+
+Collision results are processed in a fixed order, so a simulation gives the same
+result on every run regardless of thread scheduling.
+
 ### Raycasting
 
 ```csharp
@@ -1588,21 +1701,29 @@ Parallel.ForEach(islandSolver.GetIslandsForParallel(), island => {
 
 ### Sleeping Bodies
 
-```csharp
-// Configure sleeping
-body.CanSleep = true;
-world.AllowSleep = true;
+Bodies that touch each other (or are connected by joints, in 2D) form an *island*.
+An island is put to sleep once every body in it has been at rest for a while, and
+is woken as a whole when something moving touches it or a body is removed from the
+world. Sleeping bodies cost nothing to simulate.
 
-// Manual wake
+```csharp
+// Per body
+body.CanSleep = true;
 if (body.IsSleeping)
 {
     body.WakeUp();
 }
 
-// Sleep thresholds are defined in PhysicsConstants
-PhysicsConstants.DefaultSleepVelocityThreshold;        // 0.05
-PhysicsConstants.DefaultSleepAngularVelocityThreshold; // 0.05
-PhysicsConstants.DefaultSleepTimeThreshold;            // 0.5 seconds
+// 3D worlds (PhysicsWorld)
+world.AllowSleeping = true;
+world.SleepVelocityThreshold = 0.1;          // m/s
+world.SleepAngularVelocityThreshold = 0.25;  // rad/s
+world.SleepTimeThreshold = 0.5;              // seconds
+
+// 2D worlds (PhysicsWorld2D)
+world2D.AllowSleep = true;
+world2D.SleepVelocityThreshold = 0.05;
+world2D.SleepAngularVelocityThreshold = 0.1;
 ```
 
 ### Parallel Physics
@@ -1965,10 +2086,10 @@ else
 
 | Platform | Minimum | Recommended |
 |----------|---------|-------------|
-| Windows | .NET 6.0, x64 | .NET 8.0, AVX2 CPU |
-| Linux | .NET 6.0, x64 | .NET 8.0, AVX2 CPU |
-| macOS Intel | .NET 6.0, x64 | .NET 8.0, AVX CPU |
-| macOS Apple Silicon | .NET 6.0, ARM64 | .NET 8.0, M1/M2/M3 |
+| Windows | .NET 10.0, x64 | .NET 10.0, AVX2 CPU |
+| Linux | .NET 10.0, x64 | .NET 10.0, AVX2 CPU |
+| macOS Intel | .NET 10.0, x64 | .NET 10.0, AVX CPU |
+| macOS Apple Silicon | .NET 10.0, ARM64 | .NET 10.0, M1/M2/M3 |
 
 ### Dependencies
 
@@ -1981,7 +2102,10 @@ The DLL has minimal dependencies:
 
 ## Massive Particle System (1M+ Particles)
 
-The `MassiveParticleSystem` class is specifically designed for simulating 1 million+ particles in real-time.
+The `MassiveParticleSystem` class is designed for simulating 1 million+ particles. On the CPU its cost
+follows the number of particles that are *moving*: frozen and sleeping particles are nearly free (see
+[Mesh to Sand](#mesh-to-sand-up-to-1m-grains) for measured figures). Real-time rates with a million
+particles in motion at once need the GPU backend.
 
 ### Features
 
@@ -2108,6 +2232,18 @@ if (SimdHelpers.HasNeon && SimdHelpers.HasArm64AdvSimd)
 var particles = new MassiveParticleSystem();
 Console.WriteLine(particles.GpuBackendInfo);
 // Output: "ARM64 NEON (128-bit, 4 floats) - Apple Silicon"
+```
+
+---
+
+## Testing
+
+The `tests/Artemis.Tests` project checks the engine against known physics: free
+fall, Coulomb friction distances, inclines, restitution, momentum and energy
+conservation, stacking, sleeping, tunnelling, joints and Kepler orbits.
+
+```bash
+dotnet test
 ```
 
 ---
