@@ -224,6 +224,7 @@ namespace Artemis.Particles
         /// <returns>The id of the group.</returns>
         public int CreateRigidGroup(int firstIndex, int count, float breakSpeed = float.PositiveInfinity)
         {
+            TouchHost();
             if (firstIndex < 0 || count <= 0 || firstIndex + count > _count)
                 throw new ArgumentOutOfRangeException(nameof(count));
 
@@ -306,6 +307,7 @@ namespace Artemis.Particles
         /// </summary>
         public void SetGroupVelocity(int groupId, Vector3 linear, Vector3 angular = default)
         {
+            TouchHost();
             var group = GetGroup(groupId);
             group.Velocity = linear;
 
@@ -324,6 +326,7 @@ namespace Artemis.Particles
         /// </summary>
         public void DissolveGroup(int groupId)
         {
+            TouchHost();
             var group = GetGroup(groupId);
             foreach (int i in group.Members)
                 _groupOf[i] = -1;
@@ -338,7 +341,10 @@ namespace Artemis.Particles
         /// </summary>
         /// <returns>The number of rigid fragments created.</returns>
         public int ShatterGroup(int groupId, Vector3 impactPoint)
-            => Shatter(groupId, impactPoint, 0);
+        {
+            TouchHost();
+            return Shatter(groupId, impactPoint, 0);
+        }
 
         private RigidGroup GetGroup(int groupId)
         {

@@ -28,6 +28,7 @@ A high-performance, multi-threaded physics engine for C# with GPU acceleration, 
   - [Joints & Constraints](#joints--constraints)
   - [Area Effectors](#area-effectors)
 - [Particle Systems](#particle-systems)
+- [Soft Bodies](#soft-bodies)
   - [Basic Particles](#basic-particles)
   - [Sand Simulation](#sand-simulation)
   - [Fluid Simulation (SPH)](#fluid-simulation-sph)
@@ -57,9 +58,10 @@ A high-performance, multi-threaded physics engine for C# with GPU acceleration, 
 
 - **Multi-threaded Physics** - Parallel collision detection and constraint solving
 - **SIMD Optimization** - Structure of Arrays (SoA) layout for vectorized operations
-- **GPU Acceleration** - OpenCL, CUDA, Vulkan, DirectCompute, Metal backends
+- **GPU Acceleration** - OpenCL backend for the massive particle system (sand, frozen statues, soft bodies)
 - **2D & 3D Physics** - Complete engines for both dimensions
 - **Particle Systems** - Sand, fluid (SPH), fire, smoke simulations
+- **Soft Bodies** - Jelly, rubber and clay-like bodies built from meshes, on CPU or GPU
 - **Force Systems** - Uniform gravity, point gravity fields, wind, buoyancy, magnetism, vortex, explosions
 - **Continuous Collision Detection** - Prevents tunneling for fast objects
 - **Spatial Hashing** - O(n) broad-phase collision detection
@@ -87,7 +89,7 @@ dotnet add package Artemis.Physics
 
 ### Requirements
 - .NET 10 SDK (the core library also targets .NET Standard 2.1)
-- Optional: GPU with OpenCL/CUDA support for acceleration
+- Optional: an OpenCL 1.2 driver (NVIDIA, AMD or Intel GPU; macOS ships one) for GPU particles
 
 ---
 
@@ -347,7 +349,7 @@ CollisionLayers.Trigger    // Layer 6
 
 ### PhysicsWorld2D
 
-Multi-threaded 2D physics with spatial hashing and GPU support.
+Multi-threaded 2D physics with spatial hashing.
 
 ```csharp
 using Artemis.Physics2D;
@@ -360,7 +362,6 @@ world.VelocityIterations = 8;
 world.PositionIterations = 3;
 world.AllowSleep = true;
 world.UseCCD = true;
-world.UseGPU = true; // Enable GPU acceleration
 
 // Body management
 world.AddBody(body);
@@ -588,7 +589,7 @@ foreach (var p in particles.GetAliveParticles())
 
 ### Sand Simulation
 
-High-performance granular material simulation with multi-threading and GPU support.
+High-performance granular material simulation with multi-threading and SIMD.
 
 ```csharp
 using Artemis.Particles;
@@ -605,7 +606,6 @@ sand.Gravity = new Vector3D(0, -9.81, 0);
 sand.Friction = 0.5;
 sand.Restitution = 0.3;
 sand.ParticleRadius = 0.2;
-sand.UseGPU = true;
 sand.MaxThreads = Environment.ProcessorCount;
 
 // Add particles
@@ -708,6 +708,47 @@ A fall from height *h* lands at `sqrt(2 g h)` (4.4 m/s from one metre), so a bre
 speed of 2 m/s survives being put down and breaks when dropped from about 20 cm.
 Loose grains, frozen statues and rigid objects all live in the same system and collide
 with each other.
+
+### Soft Bodies
+
+A soft body is a mesh rebuilt from particles that are held together by overlapping
+clusters (clustered shape matching, as in NVIDIA FleX). Each cluster pulls its
+particles back towards its rest shape, so the body squashes, wobbles and bends, keeps
+its volume and always springs back. Soft bodies collide with each other, with sand and
+with shattering objects, and run on the GPU as well.
+
+```csharp
+var world = new MassiveParticleSystem(200_000,
+    new AABB(new Vector3D(-5, 0, -5), new Vector3D(5, 10, 5))) { Friction = 0.5f };
+
+var cube = TriangleMesh.CreateBox(new Vector3(-0.5f, 1, -0.5f), new Vector3(0.5f, 2, 0.5f));
+world.SpawnSoftBodyFromMesh(cube, particleRadius: 0.05f, out int jelly,
+    stiffness: 0.3f,      // 0.05 jelly, 0.3 rubber, 0.9+ nearly rigid
+    damping: 0.1f,        // 0 bounces like a rubber ball, 0.5 lands without bouncing
+    clusterRadius: 2f);   // cluster size in particle diameters: smaller bends more locally
+
+world.SetSoftBodyVelocity(jelly, linear: new Vector3(1, 0, 0), angular: new Vector3(0, 3, 0));
+world.Update(1f / 60f);
+
+Vector3 center = world.GetSoftBodyCenter(jelly);
+world.SetSoftBodyStiffness(jelly, 0.02f);   // go limp
+world.DissolveSoftBody(jelly);              // or fall apart into loose grains
+```
+
+Measured on a 1 m cube (1,000 particles) dropped from 1 m:
+
+| Stiffness | Damping | Squashed to | Rebound of the centre | At rest after |
+|-----------|---------|-------------|-----------------------|---------------|
+| 0.3 | 0 | 63% | 0.93 m | 7.4 s |
+| 0.3 | 0.1 | 71% | 0.65 m | 2.4 s |
+| 0.3 | 0.5 | 84% | 0.49 m (at rest: 0.48 m) | 0.9 s |
+| 0.05 | 0.1 | 41% | 0.40 m | 2.2 s |
+
+Damping acts on deformation only: falling, sliding and spinning are not slowed.
+Stiffness is defined per 1/240 s, so it does not depend on the number of sub-steps,
+but a tall soft body sags more than a short one (a 1 m jelly cube settles at about 75%
+of its height, a rubber one at 96%). Grains much smaller than the soft body's
+particles can seep into the gaps between them.
 
 ### Sand Sculpture from OBJ + Blow-Away Effects
 
@@ -1480,7 +1521,7 @@ stateTransfer.ApplyState(reversed, rigidBodies);
 
 ## Rendering & Ray Tracing
 
-Path-traced rendering of Artemis scenes with BVH acceleration and GPU support.
+Path-traced rendering of Artemis scenes with BVH acceleration (multi-threaded CPU).
 
 ```csharp
 using Artemis.Rendering;
@@ -1507,114 +1548,41 @@ byte[] image = rayTracer.ToByteArray(pixels);
 
 ## GPU Acceleration
 
-### Setup
+GPU acceleration is available for `MassiveParticleSystem` - loose sand, frozen statues
+and soft bodies - through OpenCL 1.2, which covers NVIDIA, AMD and Intel GPUs on
+Windows and Linux, and Macs (where Apple still ships OpenCL). The kernels are a port of
+the CPU solver, so a scene behaves the same on either path. CUDA, Metal, Vulkan and
+DirectCompute are not implemented; NVIDIA GPUs and Macs are used through OpenCL.
 
 ```csharp
 using Artemis.Compute;
+using Artemis.Particles;
 
-// Create GPU compute instance
-var gpu = new GpuCompute(GpuBackend.Auto);
+// What is installed?
+foreach (var device in OpenCL.Devices)
+    Console.WriteLine(device);   // name, GPU/CPU, vendor, compute units, memory, driver
 
-// Check availability
-if (gpu.IsAvailable)
-{
-    Console.WriteLine($"GPU: {gpu.DeviceInfo.Name}");
-    Console.WriteLine($"Backend: {gpu.ActiveBackend}");
-    Console.WriteLine($"Memory: {gpu.DeviceInfo.TotalMemory / 1024 / 1024} MB");
-    Console.WriteLine($"Compute Units: {gpu.DeviceInfo.ComputeUnits}");
-}
+var particles = new MassiveParticleSystem(capacity: 2_000_000);
+particles.UseGPU = true;         // stays false when there is no OpenCL GPU
 
-// List all devices
-foreach (var device in gpu.AvailableDevices)
-{
-    Console.WriteLine($"[{device.DeviceId}] {device.Name} ({device.Backend})");
-}
-
-// Select specific device
-gpu.SelectDevice(deviceId: 0);
+Console.WriteLine(particles.UseGPU
+    ? $"Running on {particles.GpuBackendInfo}"
+    : $"Running on the CPU: {particles.GpuError}");
 ```
 
-### GPU Backends
+How it works:
 
-```csharp
-public enum GpuBackend
-{
-    Auto,           // Auto-detect best available
-    OpenCL,         // Intel/AMD/NVIDIA
-    CUDA,           // NVIDIA GPUs
-    Vulkan,         // Cross-platform compute
-    DirectCompute,  // Windows DirectX 12
-    Metal,          // macOS/iOS
-    CPU             // SIMD fallback
-}
-```
-
-### GPU Particle Updates
-
-```csharp
-// Enable GPU in physics world
-world.UseGPU = true;
-
-// Or use GPU compute directly
-gpu.UpdateParticles(
-    particles: particleArray,
-    deltaTime: dt,
-    gravity: new Vector3D(0, -9.81, 0)
-);
-
-// GPU collision detection
-var collisions = gpu.ComputeParticleCollisions(
-    particles: particleArray,
-    cellSize: 1.0
-);
-
-// GPU body integration
-gpu.IntegrateBodies(
-    positions: positionArray,
-    velocities: velocityArray,
-    forces: forceArray,
-    masses: massArray,
-    deltaTime: dt
-);
-
-// GPU SPH fluid simulation
-gpu.ComputeSPH(
-    particles: fluidParticles,
-    smoothingRadius: 1.5,
-    restDensity: 1000.0,
-    stiffness: 2000.0
-);
-```
-
-### Structure of Arrays (SoA)
-
-Optimized memory layout for SIMD and GPU operations.
-
-```csharp
-using Artemis.Compute;
-
-// SoA particle data
-var soa = new ParticleSoA(count: 100000);
-
-// Access arrays directly
-float[] posX = soa.PositionX;
-float[] posY = soa.PositionY;
-float[] posZ = soa.PositionZ;
-float[] velX = soa.VelocityX;
-float[] velY = soa.VelocityY;
-float[] velZ = soa.VelocityZ;
-float[] mass = soa.Mass;
-uint[] color = soa.Color;
-
-// SIMD-friendly iteration
-for (int i = 0; i < soa.Count; i += Vector<float>.Count)
-{
-    // Process Vector<float>.Count particles at once
-    var vx = new Vector<float>(velX, i);
-    var vy = new Vector<float>(velY, i);
-    // ...
-}
-```
+- The particle state stays on the GPU between updates. It is copied back only when
+  you read it (positions for rendering, `GetParticle`, queries) and copied up only after
+  you change it (spawning, releasing, explosions).
+- **Rigid groups** (objects that shatter) are solved on the CPU: while one exists,
+  `Update` runs on the CPU (`LastUpdateUsedGpu` tells which path ran).
+- **OpenCL CPU devices** (POCL, the Intel CPU runtime) are ignored unless
+  `AllowOpenCLCpuDevice` is set; on a CPU the built-in multi-threaded solver is the
+  better choice. They are useful for testing the GPU path on machines without a GPU.
+- The other systems (`PhysicsWorld2D`, `SandSimulation`, `FluidSimulation`, the ray
+  tracer, `GpuCompute`, `GpuPhysics2D`) run on the CPU. Their `UseGPU` switches are kept
+  for compatibility and stay false.
 
 ---
 
@@ -1766,7 +1734,7 @@ var oneWay = new OneWayPlatformBehavior2D(new Vector2D(0, 1))
 var grid = new SpatialHashGrid2D(cellSize: 2.0);
 var quadTree = new QuadTree2D(new AABB2D(min, max));
 
-// GPU acceleration
+// Bulk operations on arrays of bodies (parallel, on the CPU)
 using var gpu2d = new GpuPhysics2D();
 if (gpu2d.Initialize())
 {
@@ -1927,7 +1895,7 @@ for (int step = 0; step < 240; step++)
 | `Artemis.Particles` | Particle systems |
 | `Artemis.Physics2D` | 2D physics engine |
 | `Artemis.Physics2D.Particles` | 2D particle physics |
-| `Artemis.Compute` | GPU acceleration |
+| `Artemis.Compute` | OpenCL bindings, SIMD helpers |
 | `Artemis.Materials` | Physical materials |
 | `Artemis.Destruction` | Fracture, erosion, debris |
 | `Artemis.Rendering` | Ray tracing utilities |
@@ -1948,8 +1916,8 @@ for (int step = 0; step < 240; step++)
 | `FireSimulation` / `SmokeSimulation` | Thermal particle effects |
 | `CombustionSystem` | Combustible object simulation |
 | `MassiveParticleSystem` | 1M+ particle simulation |
-| `GpuCompute` | GPU acceleration |
-| `MassiveGpuCompute` | Cross-platform GPU (OpenCL/Metal/CUDA) |
+| `GpuCompute` | Bulk particle and body operations (CPU, SIMD) |
+| `MassiveGpuCompute` | OpenCL backend of `MassiveParticleSystem` |
 | `SimdHelpers` | AVX-512/AVX/NEON SIMD utilities |
 | `PhysicsMaterial` | Material properties |
 | `Accelerator2D` | Particle collider |
@@ -2058,29 +2026,17 @@ class Program
 
 ### GPU Acceleration
 
-Artemis automatically detects and uses the best available GPU backend:
-
-| Platform | Primary Backend | Fallback |
-|----------|----------------|----------|
-| Windows | CUDA (NVIDIA) | OpenCL |
-| Linux | CUDA (NVIDIA) | OpenCL |
-| macOS Intel | OpenCL | CPU SIMD |
-| macOS M1/M2/M3 | Metal | CPU SIMD (NEON) |
-
 ```csharp
-// Check GPU availability
 var particles = new MassiveParticleSystem();
 particles.UseGPU = true;
 
 if (particles.UseGPU)
-{
-    Console.WriteLine($"GPU Active: {particles.GpuBackendInfo}");
-}
+    Console.WriteLine($"GPU active: {particles.GpuBackendInfo}");
 else
-{
-    Console.WriteLine("GPU not available, using CPU SIMD");
-}
+    Console.WriteLine($"GPU not available ({particles.GpuError}), using the CPU");
 ```
+
+See [GPU Acceleration](#gpu-acceleration) for what runs where.
 
 ### Platform Requirements
 
@@ -2111,22 +2067,24 @@ particles in motion at once need the GPU backend.
 
 - **Structure of Arrays (SoA)** - Cache-optimized memory layout
 - **SIMD Acceleration** - AVX-512, AVX2, SSE, ARM NEON support
-- **GPU Compute** - OpenCL, CUDA, Metal backends
+- **GPU Compute** - OpenCL backend (NVIDIA, AMD, Intel, macOS)
 - **Counting Sort Spatial Hash** - O(n) collision detection
 - **Parallel Processing** - Multi-threaded on all CPU cores
 
 ### Performance Benchmarks
 
-Tested on various hardware configurations:
+Measured on a 4-core Xeon (2.1 GHz, AVX-512), CPU solver, 4 sub-steps per frame:
 
-| Hardware | Particles | FPS | Mode |
-|----------|-----------|-----|------|
-| RTX 4090 | 1,000,000 | 60+ | GPU (CUDA) |
-| RTX 3080 | 1,000,000 | 45+ | GPU (CUDA) |
-| M3 Max | 1,000,000 | 40+ | CPU (NEON) |
-| M1 Pro | 500,000 | 60+ | CPU (NEON) |
-| i9-13900K | 1,000,000 | 35+ | CPU (AVX-512) |
-| Ryzen 9 7950X | 1,000,000 | 30+ | CPU (AVX2) |
+| Scene | Particles | Time per frame |
+|-------|-----------|----------------|
+| Frozen statue (idle) | 1,000,000 | ~20 ms |
+| Statue released, every grain in motion | 1,000,000 | 0.4 - 0.7 s |
+| Sand column collapsing, then asleep | 20,000 | 14 ms, falling to 2 ms |
+| Soft body (9,261 clusters) | 64,000 | 53 ms |
+
+The cost follows the number of particles that are *moving*. GPU timings depend on the
+card and have not been measured for this release; the OpenCL path was verified for
+correctness on a CPU OpenCL runtime (POCL).
 
 ### Optimizing for Maximum Performance
 
@@ -2218,8 +2176,7 @@ Artemis is fully optimized for Apple Silicon Macs:
 
 - **ARM64 NEON SIMD** - Native 128-bit vector operations
 - **FMA Support** - Fused multiply-add for better precision
-- **Metal Compute** - GPU acceleration (when Metal bindings available)
-- **Unified Memory** - Efficient CPU-GPU data sharing
+- **OpenCL** - GPU particles through Apple's OpenCL driver
 
 ```csharp
 // Apple Silicon detection

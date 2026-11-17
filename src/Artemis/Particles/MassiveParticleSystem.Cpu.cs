@@ -159,6 +159,7 @@ namespace Artemis.Particles
             _wake = new byte[capacity];
             _hit = new byte[capacity];
             AllocateGroupArrays(capacity);
+            AllocateSoftArrays(capacity);
 
             _sorted = new SortedParticle[capacity];
             _stabX = new float[capacity];
@@ -168,6 +169,7 @@ namespace Artemis.Particles
 
         private int CountFlag(byte flag)
         {
+            SyncHost();
             int total = 0;
             for (int i = 0; i < _count; i++)
             {
@@ -187,6 +189,7 @@ namespace Artemis.Particles
         /// </summary>
         public void SetFrozen(int index, bool frozen)
         {
+            TouchHost();
             if (index < 0 || index >= _count)
                 throw new ArgumentOutOfRangeException(nameof(index));
 
@@ -207,6 +210,7 @@ namespace Artemis.Particles
         /// </summary>
         public void Freeze(int startIndex, int count)
         {
+            TouchHost();
             int end = Math.Min(startIndex + count, _count);
             for (int i = Math.Max(startIndex, 0); i < end; i++)
             {
@@ -250,6 +254,7 @@ namespace Artemis.Particles
         /// <returns>The number of particles released.</returns>
         public int ReleaseWhere(Func<float, float, float, bool> predicate)
         {
+            TouchHost();
             if (predicate == null) throw new ArgumentNullException(nameof(predicate));
 
             int released = 0;
@@ -272,6 +277,7 @@ namespace Artemis.Particles
         /// </summary>
         public void WakeAll()
         {
+            TouchHost();
             for (int i = 0; i < _count; i++)
             {
                 _flags[i] &= unchecked((byte)~FlagSleeping);
@@ -282,12 +288,12 @@ namespace Artemis.Particles
         /// <summary>
         /// Whether a particle is frozen.
         /// </summary>
-        public bool IsFrozen(int index) => (_flags[index] & FlagFrozen) != 0;
+        public bool IsFrozen(int index) { SyncHost(); return (_flags[index] & FlagFrozen) != 0; }
 
         /// <summary>
         /// Whether a particle is asleep.
         /// </summary>
-        public bool IsSleeping(int index) => (_flags[index] & FlagSleeping) != 0;
+        public bool IsSleeping(int index) { SyncHost(); return (_flags[index] & FlagSleeping) != 0; }
 
         #endregion
 
@@ -301,6 +307,10 @@ namespace Artemis.Particles
 
             Predict(dt);
 
+            // Shape matching first, contacts after: the contacts get the last word, so
+            // a soft body cannot pull its particles back into whatever it touches.
+            MatchSoftBodies(dt);
+
             // With every particle frozen or asleep there is nothing to solve: an idle
             // scene costs one pass over the flags.
             if (EnableCollisions && _maxRadius > 0 && _awakeColliders > 0)
@@ -311,6 +321,7 @@ namespace Artemis.Particles
 
             MatchRigidGroups(dt);
             Finish(dt);
+            DampSoftBodies();
         }
 
         private void ForRanges(int count, Action<int, int> body)
@@ -555,7 +566,7 @@ namespace Artemis.Particles
                         ? _invMass[i]
                         : (flags & FlagFrozen) != 0 ? -1f : -2f;
 
-                    record.Group = _groupOf[i];
+                    record.Group = BodyTag(i);
                     record.MoveX = x - _prevX[i];
                     record.MoveY = y - _prevY[i];
                     record.MoveZ = z - _prevZ[i];
@@ -691,30 +702,12 @@ namespace Artemis.Particles
         [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
         private void SolveRange(int start, int end, float dt)
         {
-            float friction = Math.Max(Friction, 0);
-            float relaxation = ContactRelaxation;
+            GetContactParameters(dt, out float friction, out float relaxation, out float movingThresholdSq,
+                out float breakDistance, out bool canBreak, out float stackingBias, out float upX, out float upY, out float upZ);
             float invCell = _gridInvCell;
             int mask = _bucketMask;
-            float movingThresholdSq = WakeSpeed * dt * WakeSpeed * dt;
-            float breakDistance = FrozenBreakSpeed * dt;
-            bool canBreak = !float.IsInfinity(FrozenBreakSpeed);
             bool dense = _gridDense;
             int x0 = _gridX0, y0 = _gridY0, z0 = _gridZ0, gnx = _gridNx, gny = _gridNy;
-
-            float stackingBias = Math.Clamp(StackingBias, 0f, 1f);
-            float upX = 0, upY = 0, upZ = 0;
-            float gravityLength = Gravity.Length();
-            if (gravityLength > 1e-6f)
-            {
-                upX = -Gravity.X / gravityLength;
-                upY = -Gravity.Y / gravityLength;
-                upZ = -Gravity.Z / gravityLength;
-            }
-            else
-            {
-                stackingBias = 0;
-            }
-
             int[] bucketStart = _bucketStart;
             SortedParticle[] sorted = _sorted;
             byte[] wakeFlags = _wake;
@@ -811,7 +804,7 @@ namespace Artemis.Particles
                                 // barely touch), so that nothing stays asleep in
                                 // mid-air when its support is carried away.
                                 if (wj == -2f && moving && distSq < minDist * minDist * 1.21f)
-                                    wakeFlags[other.Index] = WakeUp;
+                                    { if (wakeFlags[other.Index] < WakeUp) wakeFlags[other.Index] = WakeUp; }
 
                                 if (distSq >= minDist * minDist)
                                     continue;
@@ -828,7 +821,7 @@ namespace Artemis.Particles
                                     // Coincident centres: separate along a fixed
                                     // axis, in opposite directions for the pair.
                                     dist = 0;
-                                    nx = 0; ny = s > t ? 1f : -1f; nz = 0;
+                                    nx = 0; ny = self.Index > other.Index ? 1f : -1f; nz = 0;
                                 }
 
                                 // Relative movement during this sub-step.
@@ -1029,7 +1022,7 @@ namespace Artemis.Particles
                     // A particle that nothing touched keeps the velocity it was
                     // integrated with. Re-deriving it from the positions would only
                     // add rounding error, which is noticeable far from the origin.
-                    bool corrected = hit != 0 || _groupOf[i] >= 0 ||
+                    bool corrected = hit != 0 || _groupOf[i] >= 0 || _softOf[i] >= 0 ||
                         (solved && (flags & FlagCollides) != 0 &&
                          (_dpX[i] != 0 || _dpY[i] != 0 || _dpZ[i] != 0));
                     if (!corrected)
@@ -1073,7 +1066,7 @@ namespace Artemis.Particles
                     _velY[i] = vy;
                     _velZ[i] = vz;
 
-                    if (!allowSleeping || _groupOf[i] >= 0)
+                    if (!allowSleeping || _groupOf[i] >= 0 || _softOf[i] >= 0)
                         continue;
 
                     if (vx * vx + vy * vy + vz * vz < sleepSpeedSq)

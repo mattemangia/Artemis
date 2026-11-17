@@ -56,9 +56,6 @@ namespace Artemis.Particles
         private readonly List<IForce> _externalForces;
 
         // GPU compute
-        private MassiveGpuCompute? _gpuCompute;
-        private bool _useGpu;
-        private bool _gpuInitialized;
 
         // Thread synchronization
         private readonly object _countLock = new object();
@@ -142,51 +139,22 @@ namespace Artemis.Particles
         public double CollisionRestitution { get; set; } = 0.2;
 
         /// <summary>
-        /// Gets or sets whether to use GPU acceleration for SPH calculations.
+        /// Kept for compatibility. The SPH solver has no GPU path and always runs on
+        /// the CPU (multi-threaded, SIMD), so the value stays false.
         /// </summary>
         public bool UseGPU
         {
-            get => _useGpu;
-            set
-            {
-                if (value && !_gpuInitialized)
-                {
-                    InitializeGpu();
-                }
-                _useGpu = value && _gpuInitialized;
-            }
+            get => false;
+            set { }
         }
 
         /// <summary>
         /// Gets the current SIMD/GPU capabilities info.
         /// </summary>
         public string AccelerationInfo =>
-            _useGpu && _gpuCompute != null ? _gpuCompute.BackendInfo :
             HasAvx ? "AVX SIMD (CPU)" :
             HasNeon ? "ARM NEON SIMD (CPU)" :
             "Generic SIMD (CPU)";
-
-        #endregion
-
-        #region GPU Initialization
-
-        private void InitializeGpu()
-        {
-            try
-            {
-                _gpuCompute = new MassiveGpuCompute();
-                _gpuInitialized = _gpuCompute.Initialize();
-                if (_gpuInitialized)
-                {
-                    _gpuCompute.AllocateBuffers(_capacity);
-                }
-            }
-            catch
-            {
-                _gpuCompute = null;
-                _gpuInitialized = false;
-            }
-        }
 
         #endregion
 
@@ -292,11 +260,6 @@ namespace Artemis.Particles
 
             _capacity = newCapacity;
 
-            // Re-allocate GPU buffers if GPU is enabled
-            if (_gpuInitialized && _gpuCompute != null)
-            {
-                _gpuCompute.AllocateBuffers(newCapacity);
-            }
         }
 
         private List<FluidParticle> GetParticleList()

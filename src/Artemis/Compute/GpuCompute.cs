@@ -90,8 +90,14 @@ namespace Artemis.Compute
     }
 
     /// <summary>
-    /// GPU compute accelerator for physics simulations.
-    /// Supports OpenCL (Intel/AMD/NVIDIA), CUDA (NVIDIA), and CPU fallback.
+    /// Bulk physics operations (particle update and collisions, rigid-body
+    /// integration, SPH) for <see cref="ParticleSoA"/> data.
+    /// <para>
+    /// Despite the name, these run on the CPU with SIMD and multi-threading on every
+    /// platform; <see cref="AvailableDevices"/> also lists the machine's OpenCL
+    /// devices for information. For GPU-accelerated particles use
+    /// <see cref="Artemis.Particles.MassiveParticleSystem.UseGPU"/>.
+    /// </para>
     /// </summary>
     public class GpuCompute : IGpuCompute
     {
@@ -152,57 +158,38 @@ namespace Artemis.Compute
 
             _devices.Clear();
 
-            // Try to initialize backends in order of preference
-            var backendsToTry = _preferredBackend == GpuBackend.Auto
-                ? new[] { GpuBackend.CUDA, GpuBackend.OpenCL, GpuBackend.Vulkan, GpuBackend.CPU }
-                : new[] { _preferredBackend, GpuBackend.CPU };
+            // The operations of this class (particle update, collisions, rigid-body
+            // integration, SPH) run on the CPU with SIMD on every platform. The OpenCL
+            // devices of the machine are listed for information; GPU acceleration of
+            // particles is provided by MassiveParticleSystem.UseGPU.
+            _backend = new CpuSimdCompute();
+            _devices.AddRange(_backend.AvailableDevices);
 
-            foreach (var backend in backendsToTry)
+#if !NETSTANDARD2_1
+            int id = _devices.Count;
+            foreach (var device in OpenCL.Devices)
             {
-                try
+                _devices.Add(new GpuDeviceInfo
                 {
-                    switch (backend)
-                    {
-                        case GpuBackend.OpenCL:
-                            _backend = new OpenCLCompute();
-                            break;
-                        case GpuBackend.CUDA:
-                            _backend = new CudaCompute();
-                            break;
-                        case GpuBackend.Vulkan:
-                            _backend = new VulkanCompute();
-                            break;
-                        case GpuBackend.CPU:
-                        default:
-                            _backend = new CpuSimdCompute();
-                            break;
-                    }
-
-                    if (_backend.IsAvailable)
-                    {
-                        _devices.AddRange(_backend.AvailableDevices);
-                        break;
-                    }
-                }
-                catch
-                {
-                    // Backend not available, try next
-                    _backend = null;
-                }
+                    Name = device.Name,
+                    Vendor = device.Vendor,
+                    Backend = GpuBackend.OpenCL,
+                    TotalMemory = device.GlobalMemory,
+                    ComputeUnits = device.ComputeUnits,
+                    MaxWorkGroupSize = device.MaxWorkGroupSize,
+                    SupportsDouble = false,
+                    DeviceId = id++
+                });
             }
-
-            // Fallback to CPU if nothing else works
-            if (_backend == null)
-            {
-                _backend = new CpuSimdCompute();
-            }
+#endif
 
             _initialized = true;
             return IsAvailable;
         }
 
         /// <summary>
-        /// Selects a specific device by ID.
+        /// Selects a device by id. Only the CPU device (id 0) executes the
+        /// operations of this class; the other listed devices are informational.
         /// </summary>
         public bool SelectDevice(int deviceId)
         {
@@ -279,277 +266,6 @@ namespace Artemis.Compute
 
         #endregion
     }
-
-    #region OpenCL Backend
-
-    /// <summary>
-    /// OpenCL compute backend - works with Intel, AMD, and NVIDIA GPUs.
-    /// </summary>
-    internal class OpenCLCompute : IGpuCompute
-    {
-        private readonly List<GpuDeviceInfo> _devices = new();
-        private GpuDeviceInfo? _activeDevice;
-        private bool _isAvailable;
-
-        // OpenCL kernel sources
-        private static readonly string ParticleUpdateKernel = @"
-__kernel void updateParticles(
-    __global float4* positions,
-    __global float4* velocities,
-    __global float* lifetimes,
-    float4 gravity,
-    float deltaTime,
-    int count)
-{
-    int i = get_global_id(0);
-    if (i >= count) return;
-
-    // Semi-implicit Euler integration
-    velocities[i] += gravity * deltaTime;
-    positions[i] += velocities[i] * deltaTime;
-    lifetimes[i] -= deltaTime;
-}";
-
-        private static readonly string SpatialHashKernel = @"
-__kernel void buildSpatialHash(
-    __global float4* positions,
-    __global int* cellIndices,
-    __global int* particleIndices,
-    float cellSize,
-    int count)
-{
-    int i = get_global_id(0);
-    if (i >= count) return;
-
-    float4 pos = positions[i];
-    int cx = (int)floor(pos.x / cellSize);
-    int cy = (int)floor(pos.y / cellSize);
-    int cz = (int)floor(pos.z / cellSize);
-
-    // Spatial hash using prime numbers
-    int hash = (cx * 73856093) ^ (cy * 19349663) ^ (cz * 83492791);
-    cellIndices[i] = hash & 0x7FFFFFFF;
-    particleIndices[i] = i;
-}";
-
-        private static readonly string SPHDensityKernel = @"
-__kernel void computeDensity(
-    __global float4* positions,
-    __global float* densities,
-    float smoothingRadius,
-    float mass,
-    int count)
-{
-    int i = get_global_id(0);
-    if (i >= count) return;
-
-    float4 pos_i = positions[i];
-    float density = 0.0f;
-    float h2 = smoothingRadius * smoothingRadius;
-    float poly6Const = 315.0f / (64.0f * 3.14159265f * pown(smoothingRadius, 9));
-
-    for (int j = 0; j < count; j++) {
-        float4 pos_j = positions[j];
-        float4 r = pos_i - pos_j;
-        float r2 = dot(r.xyz, r.xyz);
-
-        if (r2 < h2) {
-            float w = h2 - r2;
-            density += mass * poly6Const * w * w * w;
-        }
-    }
-
-    densities[i] = density;
-}";
-
-        public bool IsAvailable => _isAvailable;
-        public GpuDeviceInfo? DeviceInfo => _activeDevice;
-        public IReadOnlyList<GpuDeviceInfo> AvailableDevices => _devices;
-
-        public OpenCLCompute()
-        {
-            Initialize();
-        }
-
-        private void Initialize()
-        {
-            try
-            {
-                // In a real implementation, this would use OpenCL bindings
-                // For now, we detect availability based on platform
-
-                // Check for OpenCL DLL availability
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                {
-                    // Try to load OpenCL.dll
-                    try
-                    {
-                        // Simulated device detection
-                        _devices.Add(new GpuDeviceInfo
-                        {
-                            Name = "OpenCL Compatible GPU",
-                            Vendor = "Auto-detected",
-                            Backend = GpuBackend.OpenCL,
-                            TotalMemory = 4L * 1024 * 1024 * 1024, // 4GB estimated
-                            ComputeUnits = 16,
-                            MaxWorkGroupSize = 256,
-                            SupportsDouble = true,
-                            DeviceId = 0
-                        });
-                        _isAvailable = true;
-                    }
-                    catch
-                    {
-                        _isAvailable = false;
-                    }
-                }
-                else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-                {
-                    // Try to load libOpenCL.so
-                    _isAvailable = true; // Assume available on Linux
-                }
-
-                if (_devices.Count > 0)
-                {
-                    _activeDevice = _devices[0];
-                }
-            }
-            catch
-            {
-                _isAvailable = false;
-            }
-        }
-
-        public bool SelectDevice(int deviceId)
-        {
-            if (deviceId >= 0 && deviceId < _devices.Count)
-            {
-                _activeDevice = _devices[deviceId];
-                return true;
-            }
-            return false;
-        }
-
-        public void UpdateParticles(ParticleSoA particles, float deltaTime, Vector3D gravity)
-        {
-            // In real implementation, this would execute OpenCL kernel
-            // Fallback to CPU SIMD for now
-            CpuSimdCompute.UpdateParticlesSIMD(particles, deltaTime, gravity);
-        }
-
-        public void ComputeParticleCollisions(ParticleSoA particles, float cellSize)
-        {
-            // Would use spatial hash kernel on GPU
-            CpuSimdCompute.ComputeCollisionsSIMD(particles, cellSize);
-        }
-
-        public void IntegrateBodies(Span<Vector3D> positions, Span<Vector3D> velocities,
-            Span<Vector3D> forces, Span<float> masses, float deltaTime)
-        {
-            CpuSimdCompute.IntegrateBodiesSIMD(positions, velocities, forces, masses, deltaTime);
-        }
-
-        public void ComputeSPH(ParticleSoA particles, float smoothingRadius, float restDensity, float stiffness)
-        {
-            CpuSimdCompute.ComputeSPH_SIMD(particles, smoothingRadius, restDensity, stiffness);
-        }
-
-        public void Dispose() { }
-    }
-
-    #endregion
-
-    #region CUDA Backend
-
-    /// <summary>
-    /// CUDA compute backend - NVIDIA GPUs only.
-    /// </summary>
-    internal class CudaCompute : IGpuCompute
-    {
-        private readonly List<GpuDeviceInfo> _devices = new();
-        private GpuDeviceInfo? _activeDevice;
-        private bool _isAvailable;
-
-        public bool IsAvailable => _isAvailable;
-        public GpuDeviceInfo? DeviceInfo => _activeDevice;
-        public IReadOnlyList<GpuDeviceInfo> AvailableDevices => _devices;
-
-        public CudaCompute()
-        {
-            Initialize();
-        }
-
-        private void Initialize()
-        {
-            try
-            {
-                // Would check for nvcuda.dll / libcuda.so
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                {
-                    // Check if CUDA is available
-                    // In real implementation: cuInit(0) and cuDeviceGetCount
-                    _isAvailable = false; // Requires CUDA runtime
-                }
-            }
-            catch
-            {
-                _isAvailable = false;
-            }
-        }
-
-        public bool SelectDevice(int deviceId) => false;
-
-        public void UpdateParticles(ParticleSoA particles, float deltaTime, Vector3D gravity)
-        {
-            CpuSimdCompute.UpdateParticlesSIMD(particles, deltaTime, gravity);
-        }
-
-        public void ComputeParticleCollisions(ParticleSoA particles, float cellSize)
-        {
-            CpuSimdCompute.ComputeCollisionsSIMD(particles, cellSize);
-        }
-
-        public void IntegrateBodies(Span<Vector3D> positions, Span<Vector3D> velocities,
-            Span<Vector3D> forces, Span<float> masses, float deltaTime)
-        {
-            CpuSimdCompute.IntegrateBodiesSIMD(positions, velocities, forces, masses, deltaTime);
-        }
-
-        public void ComputeSPH(ParticleSoA particles, float smoothingRadius, float restDensity, float stiffness)
-        {
-            CpuSimdCompute.ComputeSPH_SIMD(particles, smoothingRadius, restDensity, stiffness);
-        }
-
-        public void Dispose() { }
-    }
-
-    #endregion
-
-    #region Vulkan Backend
-
-    /// <summary>
-    /// Vulkan compute shader backend.
-    /// </summary>
-    internal class VulkanCompute : IGpuCompute
-    {
-        private readonly List<GpuDeviceInfo> _devices = new();
-
-        public bool IsAvailable => false; // Not implemented yet
-        public GpuDeviceInfo? DeviceInfo => null;
-        public IReadOnlyList<GpuDeviceInfo> AvailableDevices => _devices;
-
-        public bool SelectDevice(int deviceId) => false;
-
-        public void UpdateParticles(ParticleSoA particles, float deltaTime, Vector3D gravity) { }
-        public void ComputeParticleCollisions(ParticleSoA particles, float cellSize) { }
-        public void IntegrateBodies(Span<Vector3D> positions, Span<Vector3D> velocities,
-            Span<Vector3D> forces, Span<float> masses, float deltaTime) { }
-        public void ComputeSPH(ParticleSoA particles, float smoothingRadius, float restDensity, float stiffness) { }
-
-        public void Dispose() { }
-    }
-
-    #endregion
 
     #region CPU SIMD Backend
 

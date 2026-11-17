@@ -450,8 +450,15 @@ namespace Artemis.Rendering
         /// <summary>Ambient light contribution.</summary>
         public Vector3 AmbientLight { get; set; } = new Vector3(0.1f, 0.1f, 0.1f);
 
-        /// <summary>Whether to use GPU acceleration.</summary>
-        public bool UseGPU { get; set; } = true;
+        /// <summary>
+        /// Kept for compatibility. The ray tracer has no GPU path; images are always
+        /// rendered on the CPU (multi-threaded), so the value stays false.
+        /// </summary>
+        public bool UseGPU
+        {
+            get => false;
+            set { }
+        }
 
         /// <summary>Gets the active GPU device info.</summary>
         public GpuDeviceInfo? GpuDevice => _gpuCompute?.DeviceInfo;
@@ -726,14 +733,7 @@ namespace Artemis.Rendering
             if (_bvhDirty)
                 RebuildBVH();
 
-            if (UseGPU && _gpuCompute?.IsAvailable == true)
-            {
-                TraceImageGPU(pixels, width, height, cameraPos, lowerLeftCorner, horizontal, vertical);
-            }
-            else
-            {
-                TraceImageCPU(pixels, width, height, cameraPos, lowerLeftCorner, horizontal, vertical);
-            }
+            TraceImageCPU(pixels, width, height, cameraPos, lowerLeftCorner, horizontal, vertical);
 
             return pixels;
         }
@@ -754,15 +754,6 @@ namespace Artemis.Rendering
                     pixels[y * width + x] = TraceRay(ray);
                 }
             });
-        }
-
-        private void TraceImageGPU(
-            Vector3[] pixels, int width, int height,
-            Vector3 origin, Vector3 lowerLeft, Vector3 horizontal, Vector3 vertical)
-        {
-            // GPU kernel would be executed here
-            // For now, fallback to CPU with SIMD optimizations
-            TraceImageCPU(pixels, width, height, origin, lowerLeft, horizontal, vertical);
         }
 
         private bool FindClosestHit(Ray ray, out RayHit closestHit)

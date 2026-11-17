@@ -7,8 +7,9 @@ using Artemis.Compute;
 namespace Artemis.Physics2D
 {
     /// <summary>
-    /// GPU-accelerated physics operations for 2D.
-    /// Uses the Artemis.Compute GPU backend for parallel computation.
+    /// Bulk 2D physics operations on arrays of bodies (integration, broad phase,
+    /// explosions, damping). Despite the name, they run on the CPU in parallel on
+    /// every platform; the "Gpu" method names are kept for compatibility.
     /// </summary>
     public class GpuPhysics2D : IDisposable
     {
@@ -112,7 +113,7 @@ namespace Artemis.Physics2D
         }
 
         /// <summary>
-        /// GPU-accelerated velocity integration.
+        /// Parallel velocity integration.
         /// </summary>
         public void IntegrateVelocitiesGpu(int bodyCount, Vector2D gravity, double deltaTime)
         {
@@ -123,8 +124,6 @@ namespace Artemis.Physics2D
                 return;
             }
 
-            // GPU kernel would be executed here
-            // For now, use parallel CPU as fallback
             IntegrateVelocitiesCpu(bodyCount, gravity, deltaTime);
         }
 
@@ -144,7 +143,7 @@ namespace Artemis.Physics2D
         }
 
         /// <summary>
-        /// GPU-accelerated position integration.
+        /// Parallel position integration.
         /// </summary>
         public void IntegratePositionsGpu(int bodyCount, double deltaTime)
         {
@@ -168,7 +167,7 @@ namespace Artemis.Physics2D
         }
 
         /// <summary>
-        /// GPU-accelerated broad-phase collision detection (circle vs circle).
+        /// Parallel broad-phase collision detection (circle vs circle).
         /// </summary>
         public List<(int, int)> BroadPhaseCirclesGpu(int bodyCount)
         {
@@ -214,7 +213,7 @@ namespace Artemis.Physics2D
         }
 
         /// <summary>
-        /// GPU-accelerated force application (e.g., explosion).
+        /// Parallel force application (e.g., explosion).
         /// </summary>
         public void ApplyExplosionForceGpu(int bodyCount, Vector2D center, double radius, double force)
         {
@@ -242,7 +241,7 @@ namespace Artemis.Physics2D
         }
 
         /// <summary>
-        /// GPU-accelerated damping.
+        /// Parallel damping.
         /// </summary>
         public void ApplyDampingGpu(int bodyCount, double linearDamping, double angularDamping)
         {

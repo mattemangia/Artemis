@@ -46,8 +46,6 @@ namespace Artemis.Physics2D
         private readonly ReaderWriterLockSlim _bodiesLock = new();
 
         // GPU compute (optional)
-        private GpuCompute? _gpuCompute;
-        private bool _useGpu;
 
         #endregion
 
@@ -91,16 +89,14 @@ namespace Artemis.Physics2D
         /// <summary>Total simulation time elapsed.</summary>
         public double SimulationTime { get; private set; }
 
-        /// <summary>Whether to use GPU acceleration.</summary>
+        /// <summary>
+        /// Kept for compatibility. The 2D world has no GPU path and always runs on the
+        /// CPU, so the value stays false.
+        /// </summary>
         public bool UseGPU
         {
-            get => _useGpu;
-            set
-            {
-                if (value && _gpuCompute == null)
-                    InitializeGpu();
-                _useGpu = value && _gpuCompute != null;
-            }
+            get => false;
+            set { }
         }
 
         /// <summary>Whether to use continuous collision detection.</summary>
@@ -229,19 +225,6 @@ namespace Artemis.Physics2D
         public PhysicsWorld2D(Vector2D gravity) : this()
         {
             Gravity = gravity;
-        }
-
-        private void InitializeGpu()
-        {
-            try
-            {
-                _gpuCompute = new GpuCompute();
-                _gpuCompute.Initialize();
-            }
-            catch
-            {
-                _gpuCompute = null;
-            }
         }
 
         #endregion

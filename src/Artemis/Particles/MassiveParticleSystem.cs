@@ -124,7 +124,10 @@ namespace Artemis.Particles
         public float Damping { get; set; } = 0.999f;
 
         /// <summary>
-        /// Whether to use GPU acceleration.
+        /// Run the simulation on the GPU through OpenCL. Stays false when no OpenCL
+        /// GPU is available (see <see cref="GpuError"/>). While rigid groups exist
+        /// the update runs on the CPU; everything else, soft bodies included, runs
+        /// on the GPU.
         /// </summary>
         public bool UseGPU
         {
@@ -132,9 +135,11 @@ namespace Artemis.Particles
             set
             {
                 if (value && !_gpuInitialized)
-                {
                     InitializeGpu();
-                }
+
+                if (!value)
+                    SyncHost();
+
                 _useGpu = value && _gpuInitialized;
             }
         }
@@ -152,22 +157,22 @@ namespace Artemis.Particles
         /// <summary>
         /// Gets the GPU compute backend info.
         /// </summary>
-        public string GpuBackendInfo => _gpuCompute?.BackendInfo ?? "CPU Only";
+        public string GpuBackendInfo => _useGpu && _gpuCompute != null ? _gpuCompute.BackendInfo : "CPU (multi-threaded)";
 
         /// <summary>
         /// Direct access to position X array for rendering.
         /// </summary>
-        public ReadOnlySpan<float> PositionsX => new ReadOnlySpan<float>(_posX, 0, _count);
+        public ReadOnlySpan<float> PositionsX { get { SyncHost(); return new ReadOnlySpan<float>(_posX, 0, _count); } }
 
         /// <summary>
         /// Direct access to position Y array for rendering.
         /// </summary>
-        public ReadOnlySpan<float> PositionsY => new ReadOnlySpan<float>(_posY, 0, _count);
+        public ReadOnlySpan<float> PositionsY { get { SyncHost(); return new ReadOnlySpan<float>(_posY, 0, _count); } }
 
         /// <summary>
         /// Direct access to position Z array for rendering.
         /// </summary>
-        public ReadOnlySpan<float> PositionsZ => new ReadOnlySpan<float>(_posZ, 0, _count);
+        public ReadOnlySpan<float> PositionsZ { get { SyncHost(); return new ReadOnlySpan<float>(_posZ, 0, _count); } }
 
         /// <summary>
         /// Direct access to color array for rendering.
@@ -182,7 +187,7 @@ namespace Artemis.Particles
         /// <summary>
         /// Direct access to alive flags for rendering.
         /// </summary>
-        public ReadOnlySpan<byte> Flags => new ReadOnlySpan<byte>(_flags, 0, _count);
+        public ReadOnlySpan<byte> Flags { get { SyncHost(); return new ReadOnlySpan<byte>(_flags, 0, _count); } }
 
         #endregion
 
@@ -267,20 +272,16 @@ namespace Artemis.Particles
 
         private void InitializeGpu()
         {
-            try
-            {
-                _gpuCompute = new MassiveGpuCompute();
-                _gpuInitialized = _gpuCompute.Initialize();
+            _gpuCompute?.Dispose();
+            _gpuCompute = new MassiveGpuCompute();
+            _gpuInitialized = _gpuCompute.Initialize(AllowOpenCLCpuDevice);
+            _deviceStale = true;
 
-                if (_gpuInitialized)
-                {
-                    _gpuCompute.AllocateBuffers(_capacity);
-                }
-            }
-            catch (Exception)
+            if (!_gpuInitialized)
             {
+                _gpuError = _gpuCompute.InitializationError;
+                _gpuCompute.Dispose();
                 _gpuCompute = null;
-                _gpuInitialized = false;
             }
         }
 
@@ -302,6 +303,7 @@ namespace Artemis.Particles
             bool affectedByGravity = true,
             bool collides = true)
         {
+            TouchHost();
             int index = Interlocked.Increment(ref _count) - 1;
             if (index >= _capacity)
             {
@@ -407,6 +409,7 @@ namespace Artemis.Particles
             float lifetime = float.MaxValue,
             uint color = 0xFFFFFFFF)
         {
+            TouchHost();
             int count = positions.Count;
             int startIndex = Interlocked.Add(ref _count, count) - count;
 
@@ -454,11 +457,14 @@ namespace Artemis.Particles
         /// </summary>
         public void Clear()
         {
+            _hostStale = false;
+            _deviceStale = true;
             Array.Clear(_flags, 0, _count);
             _count = 0;
             _aliveCount = 0;
             _maxRadius = 0;
             ClearGroups();
+            ClearSoftBodies();
         }
 
         #endregion
@@ -472,58 +478,28 @@ namespace Artemis.Particles
         /// <param name="subSteps">Number of sub-steps for stability.</param>
         public void Update(float deltaTime, int subSteps = 4)
         {
-            if (_count == 0) return;
+            if (_count == 0 || subSteps <= 0 || deltaTime <= 0) return;
 
             float dt = deltaTime / subSteps;
 
+#if !NETSTANDARD2_1
+            if (CanUseGpu)
+            {
+                UpdateOnGpu(dt, subSteps);
+                LastUpdateUsedGpu = true;
+                return;
+            }
+#endif
+
+            // Coming from the GPU (or switching away from it): bring the host up to date.
+            SyncHost();
+            LastUpdateUsedGpu = false;
+
             for (int step = 0; step < subSteps; step++)
-            {
-                if (_useGpu && _gpuCompute != null && _gpuCompute.IsAvailable)
-                {
-                    UpdateGpu(dt);
-                }
-                else
-                {
-                    UpdateCpu(dt);
-                }
-            }
+                UpdateCpu(dt);
 
-            // Update alive count
             UpdateAliveCount();
-        }
-
-        private void UpdateGpu(float dt)
-        {
-            // Upload data to GPU
-            _gpuCompute!.UploadParticleData(
-                _posX, _posY, _posZ,
-                _velX, _velY, _velZ,
-                _mass, _radius, _flags,
-                _count
-            );
-
-            // GPU kernels
-            _gpuCompute.IntegrateParticles(dt, Gravity, Damping);
-
-            if (EnableCollisions)
-            {
-                _gpuCompute.BuildSpatialHash(_cellSize, _gridSizeX, _gridSizeY, _gridSizeZ);
-                _gpuCompute.DetectAndResolveCollisions(Restitution, Friction);
-            }
-
-            _gpuCompute.HandleBoundaryCollisions(
-                (float)Bounds.Min.X, (float)Bounds.Min.Y, (float)Bounds.Min.Z,
-                (float)Bounds.Max.X, (float)Bounds.Max.Y, (float)Bounds.Max.Z,
-                Restitution
-            );
-
-            // Download results
-            _gpuCompute.DownloadParticleData(
-                _posX, _posY, _posZ,
-                _velX, _velY, _velZ,
-                _flags,
-                _count
-            );
+            _deviceStale = true;
         }
 
         #endregion
@@ -556,6 +532,7 @@ namespace Artemis.Particles
         /// </summary>
         public void ApplyExplosion(Vector3 center, float force, float radius, bool releaseFrozen)
         {
+            TouchHost();
             float radiusSq = radius * radius;
 
             Parallel.For(0, _count, _parallelOptions, i =>
@@ -593,6 +570,7 @@ namespace Artemis.Particles
         /// </summary>
         public void ApplyForceInRadius(Vector3 center, float radius, Vector3 force)
         {
+            TouchHost();
             float radiusSq = radius * radius;
 
             Parallel.For(0, _count, _parallelOptions, i =>
@@ -620,6 +598,7 @@ namespace Artemis.Particles
         /// </summary>
         public (Vector3 Position, Vector3 Velocity, float Mass, float Radius, uint Color, bool IsAlive) GetParticle(int index)
         {
+            SyncHost();
             if (index < 0 || index >= _count)
                 throw new ArgumentOutOfRangeException(nameof(index));
 
@@ -639,6 +618,7 @@ namespace Artemis.Particles
         /// </summary>
         public void Compact()
         {
+            TouchHost();
             int writeIndex = 0;
             var newIndex = new int[_count];
 
@@ -668,6 +648,7 @@ namespace Artemis.Particles
                         _rest[writeIndex] = _rest[readIndex];
                         _wake[writeIndex] = _wake[readIndex];
                         _groupOf[writeIndex] = _groupOf[readIndex];
+                        _softOf[writeIndex] = _softOf[readIndex];
                         _restX[writeIndex] = _restX[readIndex];
                         _restY[writeIndex] = _restY[readIndex];
                         _restZ[writeIndex] = _restZ[readIndex];
@@ -677,9 +658,13 @@ namespace Artemis.Particles
             }
 
             for (int i = writeIndex; i < _count; i++)
+            {
                 _groupOf[i] = -1;
+                _softOf[i] = -1;
+            }
 
             RemapGroups(newIndex);
+            RemapSoftBodies(newIndex);
 
             _count = writeIndex;
             _aliveCount = writeIndex;

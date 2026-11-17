@@ -56,10 +56,6 @@ namespace Artemis.Particles
         private readonly ThreadLocal<List<(int, int)>> _threadLocalPairs;
 
         // GPU compute (optional) - supports OpenCL, CUDA, Metal
-        private MassiveGpuCompute? _massiveGpuCompute;
-        private GpuCompute? _gpuCompute;
-        private bool _useGpu;
-        private bool _gpuInitialized;
 
         // Thread synchronization
         private readonly object _countLock = new object();
@@ -127,20 +123,14 @@ namespace Artemis.Particles
         public double ParticleRadius { get; set; } = 0.1;
 
         /// <summary>
-        /// Gets or sets whether to use GPU acceleration.
-        /// Supports OpenCL (Windows/Linux), Metal (macOS M1/M2/M3), CUDA (NVIDIA).
+        /// Kept for compatibility. This simulation has no GPU path and always runs on
+        /// the CPU (multi-threaded, SIMD), so the value stays false. For sand on the
+        /// GPU use <see cref="MassiveParticleSystem"/> with <see cref="MassiveParticleSystem.UseGPU"/>.
         /// </summary>
         public bool UseGPU
         {
-            get => _useGpu;
-            set
-            {
-                if (value && !_gpuInitialized)
-                {
-                    InitializeGpu();
-                }
-                _useGpu = value && _gpuInitialized;
-            }
+            get => false;
+            set { }
         }
 
         /// <summary>
@@ -155,8 +145,6 @@ namespace Artemis.Particles
         {
             get
             {
-                if (_useGpu && _massiveGpuCompute != null)
-                    return _massiveGpuCompute.BackendInfo;
                 if (HasAvx512)
                     return "AVX-512 SIMD (CPU, 16 floats/op)";
                 if (HasAvx)
@@ -291,38 +279,6 @@ namespace Artemis.Particles
             _particleLocks = newLocks;
 
             _capacity = newCapacity;
-        }
-
-        #endregion
-
-        #region GPU Initialization
-
-        private void InitializeGpu()
-        {
-            try
-            {
-                // Try new MassiveGpuCompute first (better cross-platform support)
-                _massiveGpuCompute = new MassiveGpuCompute();
-                _gpuInitialized = _massiveGpuCompute.Initialize();
-
-                if (_gpuInitialized)
-                {
-                    _massiveGpuCompute.AllocateBuffers(_capacity);
-                }
-                else
-                {
-                    // Fallback to legacy GpuCompute
-                    _gpuCompute = new GpuCompute();
-                    _gpuCompute.Initialize();
-                    _gpuInitialized = _gpuCompute.IsAvailable;
-                }
-            }
-            catch
-            {
-                _massiveGpuCompute = null;
-                _gpuCompute = null;
-                _gpuInitialized = false;
-            }
         }
 
         #endregion

@@ -38,6 +38,10 @@ Include as much context as possible:
 - Run `dotnet test` before opening the PR. The suite lives in `tests/Artemis.Tests`.
 - Changes to the solvers or collision code should come with a test that checks the
   behaviour against a known physical result.
+- GPU tests (`OpenCLTests`) are skipped when no OpenCL device is present. To run them
+  without a GPU, install a CPU OpenCL runtime, for example `pocl-opencl-icd` on
+  Debian/Ubuntu. Changes to the particle solver must be made in both
+  `MassiveParticleSystem.Cpu.cs` and the kernels in `Compute/ParticleKernels.cs`.
 - If there are no automated tests for a change, describe how you verified behavior.
 
 ## Commits

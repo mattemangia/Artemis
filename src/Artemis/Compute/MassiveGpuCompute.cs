@@ -1,853 +1,295 @@
 using System;
-using System.Numerics;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Threading.Tasks;
+using System.Collections.Generic;
 
 namespace Artemis.Compute
 {
     /// <summary>
-    /// Cross-platform GPU compute for massive particle simulations.
-    /// Supports: OpenCL (Windows/Linux), Metal (macOS/iOS), CUDA (NVIDIA).
-    /// Optimized for 1M+ particles on both x64 and ARM64 (Apple Silicon M1/M2/M3).
+    /// GPU backend of <see cref="Artemis.Particles.MassiveParticleSystem"/>.
+    /// <para>
+    /// It runs the particle solver as OpenCL kernels, which covers NVIDIA, AMD and
+    /// Intel GPUs on Windows and Linux and (deprecated, but still shipped) macOS.
+    /// The kernels are a port of the CPU solver, so a scene behaves the same on
+    /// either path. Without an OpenCL driver <see cref="IsAvailable"/> is false and
+    /// the particle system stays on the CPU.
+    /// </para>
     /// </summary>
-    public class MassiveGpuCompute : IDisposable
+    public sealed class MassiveGpuCompute : IDisposable
     {
-        #region Native Library Imports
-
-        // OpenCL imports
-        private const string OPENCL_LIB_WINDOWS = "OpenCL.dll";
-        private const string OPENCL_LIB_LINUX = "libOpenCL.so.1";
-        private const string OPENCL_LIB_MACOS = "/System/Library/Frameworks/OpenCL.framework/OpenCL";
-
-        #endregion
-
-        #region Fields
-
-        private GpuBackendType _activeBackend;
-        private bool _isInitialized;
-        private bool _isAvailable;
-        private int _capacity;
-
-        // Device info
-        private string _deviceName = "Unknown";
-        private string _vendorName = "Unknown";
-        private long _deviceMemory;
-        private int _computeUnits;
-
-        // GPU buffers (managed by backend)
-        private IntPtr _posXBuffer;
-        private IntPtr _posYBuffer;
-        private IntPtr _posZBuffer;
-        private IntPtr _velXBuffer;
-        private IntPtr _velYBuffer;
-        private IntPtr _velZBuffer;
-        private IntPtr _massBuffer;
-        private IntPtr _radiusBuffer;
-        private IntPtr _flagsBuffer;
-        private IntPtr _cellIndicesBuffer;
-        private IntPtr _cellStartBuffer;
-        private IntPtr _cellEndBuffer;
-
-        // Platform-specific handles
-        private IntPtr _context;
-        private IntPtr _commandQueue;
-        private IntPtr _program;
-
-        // Kernel handles
-        private IntPtr _integrateKernel;
-        private IntPtr _buildHashKernel;
-        private IntPtr _collisionKernel;
-        private IntPtr _boundaryKernel;
-
-        // CPU fallback arrays
-        private float[]? _cpuPosX, _cpuPosY, _cpuPosZ;
-        private float[]? _cpuVelX, _cpuVelY, _cpuVelZ;
-        private float[]? _cpuMass, _cpuRadius;
-        private byte[]? _cpuFlags;
-        private int[]? _cpuCellIndices, _cpuCellStart, _cpuCellEnd;
-
-        private readonly ParallelOptions _parallelOptions;
-
-        #endregion
-
-        #region Properties
+        private bool _initialized;
+        private bool _available;
+        private string _info = "CPU (no OpenCL device)";
 
         /// <summary>
-        /// Whether GPU compute is available and initialized.
+        /// Whether a usable OpenCL device was found and the kernels compiled.
         /// </summary>
-        public bool IsAvailable => _isAvailable;
+        public bool IsAvailable => _available;
 
         /// <summary>
-        /// Active backend type.
+        /// The backend in use: <see cref="GpuBackendType.OpenCL"/>, or
+        /// <see cref="GpuBackendType.CPU_SIMD"/> when no device is available.
         /// </summary>
-        public GpuBackendType ActiveBackend => _activeBackend;
+        public GpuBackendType ActiveBackend => _available ? GpuBackendType.OpenCL : GpuBackendType.CPU_SIMD;
 
         /// <summary>
-        /// Backend information string.
+        /// Human-readable description of the device.
         /// </summary>
-        public string BackendInfo => $"{_activeBackend}: {_deviceName} ({_vendorName}, {_computeUnits} CUs, {_deviceMemory / 1024 / 1024} MB)";
-
-        #endregion
-
-        #region Constructor
-
-        public MassiveGpuCompute()
-        {
-            _parallelOptions = new ParallelOptions
-            {
-                MaxDegreeOfParallelism = Environment.ProcessorCount
-            };
-        }
-
-        #endregion
-
-        #region Initialization
+        public string BackendInfo => _info;
 
         /// <summary>
-        /// Initializes the GPU compute backend.
-        /// Automatically selects the best available backend.
+        /// Why initialisation failed, if it did (no driver, no device, compile error).
         /// </summary>
-        public bool Initialize()
+        public string? InitializationError { get; private set; }
+
+        /// <summary>
+        /// Looks for an OpenCL device and compiles the particle kernels on it.
+        /// </summary>
+        /// <param name="allowCpuDevice">
+        /// Also accept OpenCL CPU devices (POCL, the Intel CPU runtime). Off by default:
+        /// on a CPU the built-in multi-threaded solver is the better choice.
+        /// </param>
+        /// <returns>Whether the GPU path can be used.</returns>
+        public bool Initialize(bool allowCpuDevice = false)
         {
-            if (_isInitialized) return _isAvailable;
+            if (_initialized)
+                return _available;
+            _initialized = true;
 
-            // Try backends in order of preference
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-            {
-                // macOS: Try Metal first, then OpenCL
-                if (TryInitializeMetal())
-                {
-                    _activeBackend = GpuBackendType.Metal;
-                    _isAvailable = true;
-                }
-                else if (TryInitializeOpenCL())
-                {
-                    _activeBackend = GpuBackendType.OpenCL;
-                    _isAvailable = true;
-                }
-            }
-            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                // Windows: Try CUDA first, then OpenCL
-                if (TryInitializeCuda())
-                {
-                    _activeBackend = GpuBackendType.CUDA;
-                    _isAvailable = true;
-                }
-                else if (TryInitializeOpenCL())
-                {
-                    _activeBackend = GpuBackendType.OpenCL;
-                    _isAvailable = true;
-                }
-            }
-            else
-            {
-                // Linux: Try CUDA first, then OpenCL
-                if (TryInitializeCuda())
-                {
-                    _activeBackend = GpuBackendType.CUDA;
-                    _isAvailable = true;
-                }
-                else if (TryInitializeOpenCL())
-                {
-                    _activeBackend = GpuBackendType.OpenCL;
-                    _isAvailable = true;
-                }
-            }
-
-            // Fallback to SIMD CPU
-            if (!_isAvailable)
-            {
-                _activeBackend = GpuBackendType.CPU_SIMD;
-                _deviceName = "CPU (SIMD)";
-                _vendorName = RuntimeInformation.ProcessArchitecture.ToString();
-                _computeUnits = Environment.ProcessorCount;
-                _deviceMemory = Environment.WorkingSet;
-                _isAvailable = true;
-            }
-
-            _isInitialized = true;
-            return _isAvailable;
-        }
-
-        private bool TryInitializeMetal()
-        {
-            // Metal is available on macOS 10.11+ and iOS 8+
-            // For Apple Silicon (M1/M2/M3), Metal provides excellent performance
-            try
-            {
-                if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-                    return false;
-
-                // Check if we're on Apple Silicon
-                bool isAppleSilicon = RuntimeInformation.ProcessArchitecture == Architecture.Arm64;
-
-                // Metal framework check (simplified - in production would use proper Metal bindings)
-                _deviceName = isAppleSilicon ? "Apple Silicon GPU" : "AMD/Intel GPU";
-                _vendorName = "Apple";
-                _computeUnits = isAppleSilicon ? 10 : 8; // M1 has ~10 GPU cores
-                _deviceMemory = 8L * 1024 * 1024 * 1024; // Assume 8GB unified memory
-
-                // Note: Real Metal implementation would use MetalKit or SharpMetal
-                // For now, we fall through to CPU SIMD with ARM64 optimizations
-                return false; // Disable until proper Metal bindings are implemented
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        private bool TryInitializeOpenCL()
-        {
 #if NETSTANDARD2_1
+            InitializationError = "OpenCL is not supported on .NET Standard 2.1.";
             return false;
 #else
             try
             {
-                // Try to load OpenCL library
-                string libPath = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-                    ? OPENCL_LIB_WINDOWS
-                    : RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
-                        ? OPENCL_LIB_MACOS
-                        : OPENCL_LIB_LINUX;
-
-                // Check if OpenCL is available
-                if (!NativeLibrary.TryLoad(libPath, out IntPtr handle))
+                var device = OpenCL.SelectDevice(allowCpuDevice);
+                if (device == null)
+                {
+                    InitializationError = OpenCL.IsAvailable
+                        ? "Only OpenCL CPU devices were found (pass allowCpuDevice: true to use them)."
+                        : "No OpenCL driver or device was found.";
                     return false;
+                }
 
-                // In a full implementation, we would:
-                // 1. clGetPlatformIDs
-                // 2. clGetDeviceIDs
-                // 3. clCreateContext
-                // 4. clCreateCommandQueue
-                // 5. clCreateProgramWithSource
-                // 6. clBuildProgram
-                // 7. clCreateKernel
-
-                _deviceName = "OpenCL GPU";
-                _vendorName = "Auto-detected";
-                _computeUnits = 16;
-                _deviceMemory = 4L * 1024 * 1024 * 1024;
-
-                return true;
+                Runtime = new OpenCLRuntime(device, ParticleKernels.Source, "-cl-std=CL1.2");
+                Device = device;
+                _available = true;
+                _info = $"OpenCL: {device}";
             }
-            catch
+            catch (Exception exception) when (exception is OpenCLException || exception is DllNotFoundException || exception is EntryPointNotFoundException)
             {
-                return false;
+                InitializationError = exception.Message;
+                Runtime?.Dispose();
+                Runtime = null;
             }
+
+            return _available;
 #endif
         }
-
-        private bool TryInitializeCuda()
-        {
-#if NETSTANDARD2_1
-            return false;
-#else
-            try
-            {
-                // Try to load CUDA runtime
-                string libPath = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-                    ? "nvcuda.dll"
-                    : "libcuda.so.1";
-
-                if (!NativeLibrary.TryLoad(libPath, out IntPtr handle))
-                    return false;
-
-                // CUDA is available
-                _deviceName = "NVIDIA GPU (CUDA)";
-                _vendorName = "NVIDIA";
-                _computeUnits = 32;
-                _deviceMemory = 8L * 1024 * 1024 * 1024;
-
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-#endif
-        }
-
-        #endregion
-
-        #region Buffer Management
 
         /// <summary>
-        /// Allocates GPU buffers for the given particle capacity.
+        /// Kept for compatibility; buffers are now sized on demand by the particle system.
         /// </summary>
         public void AllocateBuffers(int capacity)
         {
-            _capacity = capacity;
-
-            // Allocate CPU fallback buffers
-            _cpuPosX = new float[capacity];
-            _cpuPosY = new float[capacity];
-            _cpuPosZ = new float[capacity];
-            _cpuVelX = new float[capacity];
-            _cpuVelY = new float[capacity];
-            _cpuVelZ = new float[capacity];
-            _cpuMass = new float[capacity];
-            _cpuRadius = new float[capacity];
-            _cpuFlags = new byte[capacity];
-            _cpuCellIndices = new int[capacity];
-            _cpuCellStart = new int[capacity];
-            _cpuCellEnd = new int[capacity];
-
-            // GPU buffer allocation would happen here for OpenCL/CUDA/Metal
         }
 
+#if !NETSTANDARD2_1
         /// <summary>
-        /// Uploads particle data to GPU.
+        /// The OpenCL device in use, or <c>null</c>.
         /// </summary>
-        public void UploadParticleData(
-            float[] posX, float[] posY, float[] posZ,
-            float[] velX, float[] velY, float[] velZ,
-            float[] mass, float[] radius, byte[] flags,
-            int count)
+        public OpenCLDeviceInfo? Device { get; private set; }
+
+        internal OpenCLRuntime? Runtime { get; private set; }
+
+        // Device buffers, allocated by EnsureCapacity.
+        internal int Capacity;
+        internal IntPtr PX, PY, PZ, QX, QY, QZ, VX, VY, VZ;
+        internal IntPtr InvMass, Radius, Lifetime, Flags, Rest, Wake, Body, Cell, SortedIndex;
+        internal IntPtr DpX, DpY, DpZ, StX, StY, StZ;
+        internal IntPtr SX, SY, SZ, SR, SW, SMX, SMY, SMZ, SKey, SBody;
+        internal IntPtr Counters;
+
+        internal int TableCapacity;
+        internal IntPtr BucketCount, BucketStart, Cursor;
+        internal readonly List<IntPtr> ScanSums = new();
+        internal readonly List<int> ScanSumLengths = new();
+
+        // Soft-body cluster data.
+        internal int ClusterCapacity, SlotCapacity, SoftBodyCapacity;
+        internal IntPtr ClusterStart, Members, RestX, RestY, RestZ, Rotation, GoalX, GoalY, GoalZ;
+        internal IntPtr SlotStart, Slots, Alpha, Beta;
+        internal int ChunkCapacity, BodyMemberCapacity, RigidCapacity;
+        internal IntPtr BodyStart, BodyMembers, BodyChunkStart, ChunkBody, ChunkFrom, ChunkTo, ChunkPartial, BodyRigid;
+
+        internal void EnsureCapacity(int capacity)
         {
-            // Copy to CPU buffers (or GPU in full implementation)
-            Array.Copy(posX, _cpuPosX!, count);
-            Array.Copy(posY, _cpuPosY!, count);
-            Array.Copy(posZ, _cpuPosZ!, count);
-            Array.Copy(velX, _cpuVelX!, count);
-            Array.Copy(velY, _cpuVelY!, count);
-            Array.Copy(velZ, _cpuVelZ!, count);
-            Array.Copy(mass, _cpuMass!, count);
-            Array.Copy(radius, _cpuRadius!, count);
-            Array.Copy(flags, _cpuFlags!, count);
+            var rt = Runtime!;
+            if (capacity <= Capacity)
+                return;
+
+            ReleaseParticleBuffers();
+            Capacity = capacity;
+            long f = capacity * 4L, b = capacity;
+
+            PX = ParticleBuffer(f); PY = ParticleBuffer(f); PZ = ParticleBuffer(f);
+            QX = ParticleBuffer(f); QY = ParticleBuffer(f); QZ = ParticleBuffer(f);
+            VX = ParticleBuffer(f); VY = ParticleBuffer(f); VZ = ParticleBuffer(f);
+            InvMass = ParticleBuffer(f); Radius = ParticleBuffer(f); Lifetime = ParticleBuffer(f);
+            Flags = ParticleBuffer(b); Rest = ParticleBuffer(b);
+            Wake = ParticleBuffer(f); Body = ParticleBuffer(f); Cell = ParticleBuffer(f); SortedIndex = ParticleBuffer(f);
+            DpX = ParticleBuffer(f); DpY = ParticleBuffer(f); DpZ = ParticleBuffer(f);
+            StX = ParticleBuffer(f); StY = ParticleBuffer(f); StZ = ParticleBuffer(f);
+            SX = ParticleBuffer(f); SY = ParticleBuffer(f); SZ = ParticleBuffer(f);
+            SR = ParticleBuffer(f); SW = ParticleBuffer(f);
+            SMX = ParticleBuffer(f); SMY = ParticleBuffer(f); SMZ = ParticleBuffer(f);
+            SKey = ParticleBuffer(f); SBody = ParticleBuffer(f);
+            SlotStart = ParticleBuffer((capacity + 1) * 4L);
+            Counters = ParticleBuffer(16);
         }
 
-        /// <summary>
-        /// Downloads particle data from GPU.
-        /// </summary>
-        public void DownloadParticleData(
-            float[] posX, float[] posY, float[] posZ,
-            float[] velX, float[] velY, float[] velZ,
-            byte[] flags,
-            int count)
+        internal void EnsureTable(int tableSize)
         {
-            Array.Copy(_cpuPosX!, posX, count);
-            Array.Copy(_cpuPosY!, posY, count);
-            Array.Copy(_cpuPosZ!, posZ, count);
-            Array.Copy(_cpuVelX!, velX, count);
-            Array.Copy(_cpuVelY!, velY, count);
-            Array.Copy(_cpuVelZ!, velZ, count);
-            Array.Copy(_cpuFlags!, flags, count);
-        }
+            var rt = Runtime!;
+            if (tableSize <= TableCapacity)
+                return;
 
-        #endregion
-
-        #region Compute Kernels
-
-        /// <summary>
-        /// Integrates particle positions and velocities.
-        /// </summary>
-        public void IntegrateParticles(float deltaTime, Vector3 gravity, float damping)
-        {
-            ExecuteIntegrateKernel(_capacity, deltaTime, gravity, damping);
-        }
-
-        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
-        private void ExecuteIntegrateKernel(int count, float dt, Vector3 gravity, float damping)
-        {
-            int simdWidth = Vector<float>.Count;
-            var dtVec = new Vector<float>(dt);
-            var dampVec = new Vector<float>(damping);
-            var gravXVec = new Vector<float>(gravity.X * dt);
-            var gravYVec = new Vector<float>(gravity.Y * dt);
-            var gravZVec = new Vector<float>(gravity.Z * dt);
-
-            int simdCount = count / simdWidth;
-
-            Parallel.For(0, simdCount, _parallelOptions, i =>
+            rt.ReleaseBuffer(ref BucketCount);
+            rt.ReleaseBuffer(ref BucketStart);
+            rt.ReleaseBuffer(ref Cursor);
+            for (int i = 0; i < ScanSums.Count; i++)
             {
-                int idx = i * simdWidth;
+                var buffer = ScanSums[i];
+                rt.ReleaseBuffer(ref buffer);
+            }
+            ScanSums.Clear();
+            ScanSumLengths.Clear();
 
-                // Load velocities
-                var velX = new Vector<float>(_cpuVelX!, idx);
-                var velY = new Vector<float>(_cpuVelY!, idx);
-                var velZ = new Vector<float>(_cpuVelZ!, idx);
+            TableCapacity = tableSize;
+            BucketCount = rt.CreateBuffer(tableSize * 4L);
+            BucketStart = rt.CreateBuffer((tableSize + 4) * 4L);
+            Cursor = rt.CreateBuffer(tableSize * 4L);
 
-                // Apply gravity
-                velX += gravXVec;
-                velY += gravYVec;
-                velZ += gravZVec;
-
-                // Apply damping
-                velX *= dampVec;
-                velY *= dampVec;
-                velZ *= dampVec;
-
-                // Store velocities
-                velX.CopyTo(_cpuVelX!, idx);
-                velY.CopyTo(_cpuVelY!, idx);
-                velZ.CopyTo(_cpuVelZ!, idx);
-
-                // Load and update positions
-                var posX = new Vector<float>(_cpuPosX!, idx);
-                var posY = new Vector<float>(_cpuPosY!, idx);
-                var posZ = new Vector<float>(_cpuPosZ!, idx);
-
-                posX += velX * dtVec;
-                posY += velY * dtVec;
-                posZ += velZ * dtVec;
-
-                posX.CopyTo(_cpuPosX!, idx);
-                posY.CopyTo(_cpuPosY!, idx);
-                posZ.CopyTo(_cpuPosZ!, idx);
-            });
-
-            // Handle remainder
-            int remainderStart = simdCount * simdWidth;
-            for (int i = remainderStart; i < count; i++)
+            // One block-sum buffer per level of the recursive prefix sum.
+            int length = tableSize;
+            while (length > 1)
             {
-                if ((_cpuFlags![i] & 1) == 0) continue;
-
-                _cpuVelX![i] += gravity.X * dt;
-                _cpuVelY![i] += gravity.Y * dt;
-                _cpuVelZ![i] += gravity.Z * dt;
-
-                _cpuVelX[i] *= damping;
-                _cpuVelY[i] *= damping;
-                _cpuVelZ[i] *= damping;
-
-                _cpuPosX![i] += _cpuVelX[i] * dt;
-                _cpuPosY![i] += _cpuVelY[i] * dt;
-                _cpuPosZ![i] += _cpuVelZ[i] * dt;
+                length = (length + ParticleKernels.ScanBlock - 1) / ParticleKernels.ScanBlock;
+                ScanSums.Add(rt.CreateBuffer(Math.Max(length, 1) * 4L));
+                ScanSumLengths.Add(length);
             }
         }
 
-        /// <summary>
-        /// Builds spatial hash for collision detection.
-        /// </summary>
-        public void BuildSpatialHash(float cellSize, int gridSizeX, int gridSizeY, int gridSizeZ)
+        internal void EnsureSoftCapacity(int clusters, int slots, int bodies)
         {
-            // Spatial hash is built on CPU for now
-            // GPU implementation would use parallel counting sort
-        }
-
-        /// <summary>
-        /// Detects and resolves particle collisions.
-        /// </summary>
-        public void DetectAndResolveCollisions(float restitution, float friction)
-        {
-            // Collision detection done on CPU
-            // GPU implementation would use spatial hash + parallel collision resolution
-        }
-
-        /// <summary>
-        /// Handles boundary collisions.
-        /// </summary>
-        public void HandleBoundaryCollisions(
-            float minX, float minY, float minZ,
-            float maxX, float maxY, float maxZ,
-            float restitution)
-        {
-            ExecuteBoundaryKernel(_capacity, minX, minY, minZ, maxX, maxY, maxZ, restitution);
-        }
-
-        [MethodImpl(MethodImplOptionsCompat.AggressiveOptimization)]
-        private void ExecuteBoundaryKernel(int count,
-            float minX, float minY, float minZ,
-            float maxX, float maxY, float maxZ,
-            float restitution)
-        {
-            Parallel.For(0, count, _parallelOptions, i =>
+            var rt = Runtime!;
+            if (clusters > ClusterCapacity)
             {
-                if ((_cpuFlags![i] & 1) == 0) return;
+                rt.ReleaseBuffer(ref ClusterStart);
+                rt.ReleaseBuffer(ref Rotation);
+                ClusterCapacity = Math.Max(clusters, ClusterCapacity * 2);
+                ClusterStart = rt.CreateBuffer((ClusterCapacity + 1) * 4L);
+                Rotation = rt.CreateBuffer(ClusterCapacity * 16L);
+            }
 
-                float r = _cpuRadius![i];
+            if (slots > SlotCapacity)
+            {
+                rt.ReleaseBuffer(ref Members); rt.ReleaseBuffer(ref Slots);
+                rt.ReleaseBuffer(ref RestX); rt.ReleaseBuffer(ref RestY); rt.ReleaseBuffer(ref RestZ);
+                rt.ReleaseBuffer(ref GoalX); rt.ReleaseBuffer(ref GoalY); rt.ReleaseBuffer(ref GoalZ);
+                SlotCapacity = Math.Max(slots, SlotCapacity * 2);
+                long s = SlotCapacity * 4L;
+                Members = rt.CreateBuffer(s); Slots = rt.CreateBuffer(s);
+                RestX = rt.CreateBuffer(s); RestY = rt.CreateBuffer(s); RestZ = rt.CreateBuffer(s);
+                GoalX = rt.CreateBuffer(s); GoalY = rt.CreateBuffer(s); GoalZ = rt.CreateBuffer(s);
+            }
 
-                // X bounds
-                if (_cpuPosX![i] - r < minX)
-                {
-                    _cpuPosX[i] = minX + r;
-                    _cpuVelX![i] = -_cpuVelX[i] * restitution;
-                }
-                else if (_cpuPosX[i] + r > maxX)
-                {
-                    _cpuPosX[i] = maxX - r;
-                    _cpuVelX![i] = -_cpuVelX[i] * restitution;
-                }
-
-                // Y bounds
-                if (_cpuPosY![i] - r < minY)
-                {
-                    _cpuPosY[i] = minY + r;
-                    _cpuVelY![i] = -_cpuVelY[i] * restitution;
-                }
-                else if (_cpuPosY[i] + r > maxY)
-                {
-                    _cpuPosY[i] = maxY - r;
-                    _cpuVelY![i] = -_cpuVelY[i] * restitution;
-                }
-
-                // Z bounds
-                if (_cpuPosZ![i] - r < minZ)
-                {
-                    _cpuPosZ[i] = minZ + r;
-                    _cpuVelZ![i] = -_cpuVelZ[i] * restitution;
-                }
-                else if (_cpuPosZ[i] + r > maxZ)
-                {
-                    _cpuPosZ[i] = maxZ - r;
-                    _cpuVelZ![i] = -_cpuVelZ[i] * restitution;
-                }
-            });
-        }
-
-        #endregion
-
-        #region OpenCL Kernel Source
-
-        /// <summary>
-        /// OpenCL kernel source code for particle simulation.
-        /// </summary>
-        public static readonly string OpenCLKernelSource = @"
-// Particle integration kernel
-__kernel void integrate(
-    __global float* posX,
-    __global float* posY,
-    __global float* posZ,
-    __global float* velX,
-    __global float* velY,
-    __global float* velZ,
-    __global const uchar* flags,
-    float dt,
-    float gravX,
-    float gravY,
-    float gravZ,
-    float damping,
-    int count)
-{
-    int i = get_global_id(0);
-    if (i >= count) return;
-    if ((flags[i] & 1) == 0) return;
-
-    // Apply gravity
-    if ((flags[i] & 4) != 0) {
-        velX[i] += gravX * dt;
-        velY[i] += gravY * dt;
-        velZ[i] += gravZ * dt;
-    }
-
-    // Apply damping
-    velX[i] *= damping;
-    velY[i] *= damping;
-    velZ[i] *= damping;
-
-    // Update position
-    posX[i] += velX[i] * dt;
-    posY[i] += velY[i] * dt;
-    posZ[i] += velZ[i] * dt;
-}
-
-// Spatial hash building kernel
-__kernel void buildSpatialHash(
-    __global const float* posX,
-    __global const float* posY,
-    __global const float* posZ,
-    __global int* cellIndices,
-    __global const uchar* flags,
-    float invCellSize,
-    float minX,
-    float minY,
-    float minZ,
-    int gridSizeX,
-    int gridSizeY,
-    int count)
-{
-    int i = get_global_id(0);
-    if (i >= count) return;
-
-    if ((flags[i] & 1) == 0) {
-        cellIndices[i] = -1;
-        return;
-    }
-
-    int cx = (int)((posX[i] - minX) * invCellSize);
-    int cy = (int)((posY[i] - minY) * invCellSize);
-    int cz = (int)((posZ[i] - minZ) * invCellSize);
-
-    cellIndices[i] = cx + cy * gridSizeX + cz * gridSizeX * gridSizeY;
-}
-
-// Boundary collision kernel
-__kernel void handleBoundaries(
-    __global float* posX,
-    __global float* posY,
-    __global float* posZ,
-    __global float* velX,
-    __global float* velY,
-    __global float* velZ,
-    __global const float* radius,
-    __global const uchar* flags,
-    float minX, float minY, float minZ,
-    float maxX, float maxY, float maxZ,
-    float restitution,
-    int count)
-{
-    int i = get_global_id(0);
-    if (i >= count) return;
-    if ((flags[i] & 1) == 0) return;
-
-    float r = radius[i];
-
-    // X bounds
-    if (posX[i] - r < minX) {
-        posX[i] = minX + r;
-        velX[i] = -velX[i] * restitution;
-    } else if (posX[i] + r > maxX) {
-        posX[i] = maxX - r;
-        velX[i] = -velX[i] * restitution;
-    }
-
-    // Y bounds
-    if (posY[i] - r < minY) {
-        posY[i] = minY + r;
-        velY[i] = -velY[i] * restitution;
-    } else if (posY[i] + r > maxY) {
-        posY[i] = maxY - r;
-        velY[i] = -velY[i] * restitution;
-    }
-
-    // Z bounds
-    if (posZ[i] - r < minZ) {
-        posZ[i] = minZ + r;
-        velZ[i] = -velZ[i] * restitution;
-    } else if (posZ[i] + r > maxZ) {
-        posZ[i] = maxZ - r;
-        velZ[i] = -velZ[i] * restitution;
-    }
-}
-
-// Particle collision detection and resolution kernel
-__kernel void resolveCollisions(
-    __global float* posX,
-    __global float* posY,
-    __global float* posZ,
-    __global float* velX,
-    __global float* velY,
-    __global float* velZ,
-    __global const float* invMass,
-    __global const float* radius,
-    __global const uchar* flags,
-    __global const int* cellStart,
-    __global const int* cellEnd,
-    __global const int* particleIndices,
-    float restitution,
-    float friction,
-    int gridSizeX,
-    int gridSizeY,
-    int gridSizeZ,
-    int totalCells)
-{
-    int cellIdx = get_global_id(0);
-    if (cellIdx >= totalCells) return;
-
-    int start = cellStart[cellIdx];
-    int end = cellEnd[cellIdx];
-    if (end <= start) return;
-
-    // Get cell coordinates
-    int cz = cellIdx / (gridSizeX * gridSizeY);
-    int rem = cellIdx % (gridSizeX * gridSizeY);
-    int cy = rem / gridSizeX;
-    int cx = rem % gridSizeX;
-
-    // Check collisions within cell
-    for (int a = start; a < end; a++) {
-        int i = particleIndices[a];
-        if ((flags[i] & 3) != 3) continue;
-
-        for (int b = a + 1; b < end; b++) {
-            int j = particleIndices[b];
-            if ((flags[j] & 3) != 3) continue;
-
-            float dx = posX[j] - posX[i];
-            float dy = posY[j] - posY[i];
-            float dz = posZ[j] - posZ[i];
-            float distSq = dx*dx + dy*dy + dz*dz;
-            float minDist = radius[i] + radius[j];
-
-            if (distSq < minDist * minDist && distSq > 1e-8f) {
-                float dist = sqrt(distSq);
-                float invDist = 1.0f / dist;
-                float nx = dx * invDist;
-                float ny = dy * invDist;
-                float nz = dz * invDist;
-
-                float penetration = minDist - dist;
-                float totalInvMass = invMass[i] + invMass[j];
-
-                if (totalInvMass > 1e-8f) {
-                    float correction = penetration / totalInvMass * 0.8f;
-                    float corrI = correction * invMass[i];
-                    float corrJ = correction * invMass[j];
-
-                    posX[i] -= nx * corrI;
-                    posY[i] -= ny * corrI;
-                    posZ[i] -= nz * corrI;
-                    posX[j] += nx * corrJ;
-                    posY[j] += ny * corrJ;
-                    posZ[j] += nz * corrJ;
-
-                    float dvx = velX[j] - velX[i];
-                    float dvy = velY[j] - velY[i];
-                    float dvz = velZ[j] - velZ[i];
-                    float velN = dvx*nx + dvy*ny + dvz*nz;
-
-                    if (velN < 0) {
-                        float impulse = -(1.0f + restitution) * velN / totalInvMass;
-                        velX[i] -= nx * impulse * invMass[i];
-                        velY[i] -= ny * impulse * invMass[i];
-                        velZ[i] -= nz * impulse * invMass[i];
-                        velX[j] += nx * impulse * invMass[j];
-                        velY[j] += ny * impulse * invMass[j];
-                        velZ[j] += nz * impulse * invMass[j];
-                    }
-                }
+            if (bodies > SoftBodyCapacity)
+            {
+                rt.ReleaseBuffer(ref Alpha);
+                rt.ReleaseBuffer(ref Beta);
+                SoftBodyCapacity = Math.Max(bodies, SoftBodyCapacity * 2);
+                Alpha = rt.CreateBuffer(SoftBodyCapacity * 4L);
+                Beta = rt.CreateBuffer(SoftBodyCapacity * 4L);
             }
         }
-    }
-}
-";
 
-        /// <summary>
-        /// Metal shader source code for Apple Silicon.
-        /// </summary>
-        public static readonly string MetalShaderSource = @"
-#include <metal_stdlib>
-using namespace metal;
+        internal void EnsureDampCapacity(int chunks, int members, int bodies)
+        {
+            var rt = Runtime!;
+            if (chunks > ChunkCapacity)
+            {
+                rt.ReleaseBuffer(ref ChunkBody); rt.ReleaseBuffer(ref ChunkFrom); rt.ReleaseBuffer(ref ChunkTo); rt.ReleaseBuffer(ref ChunkPartial);
+                ChunkCapacity = Math.Max(chunks, ChunkCapacity * 2);
+                ChunkBody = rt.CreateBuffer(ChunkCapacity * 4L);
+                ChunkFrom = rt.CreateBuffer(ChunkCapacity * 4L);
+                ChunkTo = rt.CreateBuffer(ChunkCapacity * 4L);
+                ChunkPartial = rt.CreateBuffer(ChunkCapacity * 64L);
+            }
 
-// Particle integration kernel for Metal
-kernel void integrate(
-    device float* posX [[buffer(0)]],
-    device float* posY [[buffer(1)]],
-    device float* posZ [[buffer(2)]],
-    device float* velX [[buffer(3)]],
-    device float* velY [[buffer(4)]],
-    device float* velZ [[buffer(5)]],
-    device const uchar* flags [[buffer(6)]],
-    constant float& dt [[buffer(7)]],
-    constant float3& gravity [[buffer(8)]],
-    constant float& damping [[buffer(9)]],
-    constant int& count [[buffer(10)]],
-    uint i [[thread_position_in_grid]])
-{
-    if (i >= (uint)count) return;
-    if ((flags[i] & 1) == 0) return;
+            if (members > BodyMemberCapacity)
+            {
+                rt.ReleaseBuffer(ref BodyMembers);
+                BodyMemberCapacity = Math.Max(members, BodyMemberCapacity * 2);
+                BodyMembers = rt.CreateBuffer(BodyMemberCapacity * 4L);
+            }
 
-    // Apply gravity
-    if ((flags[i] & 4) != 0) {
-        velX[i] += gravity.x * dt;
-        velY[i] += gravity.y * dt;
-        velZ[i] += gravity.z * dt;
-    }
+            if (bodies > RigidCapacity)
+            {
+                rt.ReleaseBuffer(ref BodyStart); rt.ReleaseBuffer(ref BodyChunkStart); rt.ReleaseBuffer(ref BodyRigid);
+                RigidCapacity = Math.Max(bodies, RigidCapacity * 2);
+                BodyStart = rt.CreateBuffer((RigidCapacity + 1) * 4L);
+                BodyChunkStart = rt.CreateBuffer((RigidCapacity + 1) * 4L);
+                BodyRigid = rt.CreateBuffer(RigidCapacity * 36L);
+            }
+        }
 
-    // Apply damping
-    velX[i] *= damping;
-    velY[i] *= damping;
-    velZ[i] *= damping;
+        private readonly List<IntPtr> _particleBuffers = new();
 
-    // Update position
-    posX[i] += velX[i] * dt;
-    posY[i] += velY[i] * dt;
-    posZ[i] += velZ[i] * dt;
-}
+        private IntPtr ParticleBuffer(long bytes)
+        {
+            var buffer = Runtime!.CreateBuffer(bytes);
+            _particleBuffers.Add(buffer);
+            return buffer;
+        }
 
-// Boundary collision kernel for Metal
-kernel void handleBoundaries(
-    device float* posX [[buffer(0)]],
-    device float* posY [[buffer(1)]],
-    device float* posZ [[buffer(2)]],
-    device float* velX [[buffer(3)]],
-    device float* velY [[buffer(4)]],
-    device float* velZ [[buffer(5)]],
-    device const float* radius [[buffer(6)]],
-    device const uchar* flags [[buffer(7)]],
-    constant float3& boundsMin [[buffer(8)]],
-    constant float3& boundsMax [[buffer(9)]],
-    constant float& restitution [[buffer(10)]],
-    constant int& count [[buffer(11)]],
-    uint i [[thread_position_in_grid]])
-{
-    if (i >= (uint)count) return;
-    if ((flags[i] & 1) == 0) return;
+        private void ReleaseParticleBuffers()
+        {
+            for (int i = 0; i < _particleBuffers.Count; i++)
+            {
+                var buffer = _particleBuffers[i];
+                Runtime!.ReleaseBuffer(ref buffer);
+            }
+            _particleBuffers.Clear();
+            Capacity = 0;
+        }
+#endif
 
-    float r = radius[i];
-
-    // X bounds
-    if (posX[i] - r < boundsMin.x) {
-        posX[i] = boundsMin.x + r;
-        velX[i] = -velX[i] * restitution;
-    } else if (posX[i] + r > boundsMax.x) {
-        posX[i] = boundsMax.x - r;
-        velX[i] = -velX[i] * restitution;
-    }
-
-    // Y bounds
-    if (posY[i] - r < boundsMin.y) {
-        posY[i] = boundsMin.y + r;
-        velY[i] = -velY[i] * restitution;
-    } else if (posY[i] + r > boundsMax.y) {
-        posY[i] = boundsMax.y - r;
-        velY[i] = -velY[i] * restitution;
-    }
-
-    // Z bounds
-    if (posZ[i] - r < boundsMin.z) {
-        posZ[i] = boundsMin.z + r;
-        velZ[i] = -velZ[i] * restitution;
-    } else if (posZ[i] + r > boundsMax.z) {
-        posZ[i] = boundsMax.z - r;
-        velZ[i] = -velZ[i] * restitution;
-    }
-}
-";
-
-        #endregion
-
-        #region Disposal
-
+        /// <inheritdoc/>
         public void Dispose()
         {
-            // Clean up GPU resources
-            _cpuPosX = null;
-            _cpuPosY = null;
-            _cpuPosZ = null;
-            _cpuVelX = null;
-            _cpuVelY = null;
-            _cpuVelZ = null;
-            _cpuMass = null;
-            _cpuRadius = null;
-            _cpuFlags = null;
-            _cpuCellIndices = null;
-            _cpuCellStart = null;
-            _cpuCellEnd = null;
+#if !NETSTANDARD2_1
+            Runtime?.Dispose();
+            Runtime = null;
+#endif
+            _available = false;
         }
-
-        #endregion
     }
 
     /// <summary>
-    /// GPU backend types.
+    /// Compute backend types.
     /// </summary>
     public enum GpuBackendType
     {
-        /// <summary>CPU fallback with SIMD optimizations.</summary>
+        /// <summary>The multi-threaded CPU solver.</summary>
         CPU_SIMD,
-        /// <summary>OpenCL (Intel, AMD, NVIDIA on Windows/Linux, deprecated on macOS).</summary>
+        /// <summary>OpenCL (NVIDIA, AMD, Intel; deprecated but available on macOS).</summary>
         OpenCL,
-        /// <summary>NVIDIA CUDA.</summary>
+        /// <summary>NVIDIA CUDA (not implemented: NVIDIA GPUs are used through OpenCL).</summary>
         CUDA,
-        /// <summary>Apple Metal (macOS/iOS, best for M1/M2/M3).</summary>
+        /// <summary>Apple Metal (not implemented: Macs are used through OpenCL).</summary>
         Metal,
-        /// <summary>Vulkan compute shaders.</summary>
+        /// <summary>Vulkan compute (not implemented).</summary>
         Vulkan,
-        /// <summary>DirectX 12 compute (Windows).</summary>
+        /// <summary>DirectX 12 compute (not implemented).</summary>
         DirectCompute
     }
 }
